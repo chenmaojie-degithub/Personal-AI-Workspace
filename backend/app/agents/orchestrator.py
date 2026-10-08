@@ -133,7 +133,10 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
         yield "agent_run", {"run_id": run_id, "session_id": session_id, "goal": goal, "status": "planning"}
         req = resolve_workspace_request(req)
         provider = create_llm_provider(req.model_id)
-        specs = relevant_tool_specs(req, get_agent_tool_specs(req.settings, session_id, req.workspace_id))
+        specs = relevant_tool_specs(
+            req,
+            get_agent_tool_specs(req.settings, session_id, req.workspace_id, req.document_ids or None),
+        )
         if specs and not resolve_model(req.model_id).supports_tools:
             raise RuntimeError(f"Model {req.model_id or 'default'} does not support Tool Calling")
         tool_map = {spec.name: spec for spec in specs}
@@ -175,6 +178,10 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                 ),
             },
             {"role": "system", "content": "PUBLIC_PLAN:\n" + "\n".join(f"{item['index']}. {item['title']}" for item in plan)},
+            *([{
+                "role": "system",
+                "content": "TASK_DOCUMENTS: " + ", ".join(req.document_ids) + ". Use only these document IDs for document tools.",
+            }] if req.document_ids else []),
             *({"role": item.role, "content": item.content} for item in req.messages),
         ]
         signatures: dict[str, int] = {}

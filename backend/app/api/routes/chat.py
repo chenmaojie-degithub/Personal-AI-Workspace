@@ -26,7 +26,7 @@ from uuid import uuid4
 from fastapi import APIRouter
 
 from app.core.config import settings
-from app.core.database import DEFAULT_WORKSPACE_ID, get_workspace, save_chat_turn, session_workspace_id
+from app.core.database import DEFAULT_WORKSPACE_ID, get_document_record, get_workspace, save_chat_turn, session_workspace_id
 from app.models.chat import ChartArtifact, ChatSettings, CitationSource, ChatMessage, ChatRequest, ChatResponse, ToolCallLog
 from app.providers.factory import create_llm_provider
 from app.providers.registry import resolve_model
@@ -254,6 +254,11 @@ def resolve_workspace_request(req: ChatRequest) -> ChatRequest:
         owner = session_workspace_id(req.session_id)
         if owner and owner != req.workspace_id:
             raise ValueError("Session belongs to a different workspace")
+    if len(req.document_ids) != len(set(req.document_ids)):
+        raise ValueError("Duplicate document IDs are not allowed")
+    for document_id in req.document_ids:
+        if not get_document_record(document_id, req.workspace_id):
+            raise ValueError("Document does not belong to the selected workspace")
     settings = {**ChatSettings().model_dump(), **workspace["tool_settings"]}
     settings.update(req.settings.model_dump(include=req.settings.model_fields_set))
     # Workspace capability switches are authoritative even for direct API callers.

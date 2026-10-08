@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.rag.service import RAGService
 from app.tools.knowledge import knowledge_citations, read_document, search_knowledge
 from app.tools.registry import get_agent_tool_specs
+from app.tools.registry import execute_tool_call
 from app.models.chat import ChatSettings
 
 
@@ -83,6 +84,13 @@ class KnowledgeToolTests(unittest.TestCase):
         self.assertIn("read_document", specs)
         self.assertNotIn("workspace_id", specs["search_knowledge"].parameters_schema["properties"])
         self.assertNotIn("session_id", specs["read_document"].parameters_schema["properties"])
+
+        associated = {
+            item.name: item
+            for item in get_agent_tool_specs(ChatSettings(), "session-1", "workspace-1", ["doc-1"])
+        }
+        with self.assertRaisesRegex(ValueError, "associated"):
+            execute_tool_call(associated, "read_document", '{"document_id":"doc-2"}')
 
 
 if __name__ == "__main__":

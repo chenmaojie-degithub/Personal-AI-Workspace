@@ -109,8 +109,23 @@ def get_agent_tool_specs(
     settings: ChatSettings,
     session_id: str,
     workspace_id: str | None = None,
+    document_ids: list[str] | None = None,
 ) -> list[ToolSpec]:
     specs = get_enabled_tool_specs(settings, workspace_id)
+    allowed_documents = set(document_ids) if document_ids else None
+
+    def ensure_allowed(document_id: str | None) -> None:
+        if allowed_documents is not None and document_id not in allowed_documents:
+            raise ValueError("document_id must be one of the documents associated with this task")
+
+    def scoped_search(**arguments: Any) -> Any:
+        ensure_allowed(arguments.get("document_id"))
+        return search_knowledge(session_id, workspace_id, **arguments)
+
+    def scoped_read(**arguments: Any) -> Any:
+        ensure_allowed(arguments.get("document_id"))
+        return read_document(session_id, workspace_id, **arguments)
+
     specs.extend([
         ToolSpec(
             name="search_knowledge",
@@ -125,7 +140,7 @@ def get_agent_tool_specs(
                 "required": ["query"],
                 "additionalProperties": False,
             },
-            handler=lambda **arguments: search_knowledge(session_id, workspace_id, **arguments),
+            handler=scoped_search,
         ),
         ToolSpec(
             name="read_document",
@@ -143,7 +158,7 @@ def get_agent_tool_specs(
                 "required": ["document_id"],
                 "additionalProperties": False,
             },
-            handler=lambda **arguments: read_document(session_id, workspace_id, **arguments),
+            handler=scoped_read,
         ),
     ])
     return specs
