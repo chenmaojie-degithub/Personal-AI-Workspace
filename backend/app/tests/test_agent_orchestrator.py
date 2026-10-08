@@ -54,6 +54,20 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertFalse(should_run_agent(self.request("What is Docker?")))
         self.assertTrue(should_run_agent(self.request("Research and compare the latest web news")))
 
+    def test_routing_uses_task_shape_and_recent_context(self) -> None:
+        attached = self.request("Use the attached evidence and current online sources to verify the claim")
+        attached.document_ids = ["doc-1"]
+        self.assertTrue(should_run_agent(attached))
+        self.assertFalse(should_run_agent(self.request("What does annual report mean?")))
+        self.assertTrue(should_run_agent(self.request("请 compare 附件与 latest news")))
+        follow_up = ChatRequest(messages=[
+            ChatMessage(role="user", content="I uploaded a document about the launch."),
+            ChatMessage(role="assistant", content="Understood."),
+            ChatMessage(role="user", content="Now compare it with current news."),
+        ])
+        self.assertTrue(should_run_agent(follow_up))
+        self.assertTrue(should_run_agent(self.request("Search the web and then summarize the two strongest sources")))
+
     def test_complex_request_is_dispatched_through_agent_sse(self) -> None:
         with patch("app.api.routes.chat_stream.run_agent", return_value=iter([
             ("agent_status", {"run_id": "run-1", "status": "completed"}),

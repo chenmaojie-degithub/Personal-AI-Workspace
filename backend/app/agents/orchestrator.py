@@ -34,22 +34,38 @@ class AgentCancelled(Exception):
     pass
 
 _COMPLEX_SIGNALS = (
-    "compare", "comparison", "report", "research", "investigate", "multi-step",
-    "cross-reference", "synthesize", "结合", "对比", "比较", "报告", "调研",
-    "研究", "综合", "多步骤", "多个文档", "多份文档", "跨文档",
+    "compare", "comparison", "research", "investigate", "multi-step", "cross-reference", "synthesize",
+    "结合", "对比", "比较", "调研", "研究", "综合", "多步骤", "多个文档", "多份文档", "跨文档",
 )
-_WEB_SIGNALS = ("search", "web", "latest", "current", "news", "搜索", "联网", "最新", "新闻")
+_SEQUENCE_SIGNALS = (" and then ", " then ", " after that", "然后", "接着", "再把", "再与", "并且")
+_CONTEXT_SIGNALS = ("that", "those", "previous", "above", "it with", "刚才", "上面", "它们", "这些", "再和", "再与")
+_WEB_SIGNALS = ("search", "web", "internet", "online", "external", "latest", "current", "news", "source", "搜索", "联网", "网上", "外部", "最新", "新闻", "来源")
 _DATA_SIGNALS = (".csv", ".xlsx", "excel", "dataset", "chart", "数据", "图表", "表格")
 _DOCUMENT_SIGNALS = ("document", "file", "pdf", "knowledge", "文档", "文件", "知识库", "资料")
 
 
 def should_run_agent(req: ChatRequest) -> bool:
-    """Use the agent only for goals that clearly need planning or multiple capabilities."""
-    latest = next((item.content.lower() for item in reversed(req.messages) if item.role == "user"), "")
-    if any(signal in latest for signal in _COMPLEX_SIGNALS):
+    """Route deterministically from task shape and recent context without another model call."""
+    user_messages = [item.content.lower() for item in req.messages if item.role == "user"]
+    latest = user_messages[-1] if user_messages else ""
+    recent = "\n".join(user_messages[-3:])
+    capabilities = [
+        any(signal in recent for signal in _WEB_SIGNALS),
+        any(signal in recent for signal in _DATA_SIGNALS),
+        bool(req.document_ids) or any(signal in recent for signal in _DOCUMENT_SIGNALS),
+    ]
+    capability_count = sum(capabilities)
+    if capability_count >= 2:
         return True
-    capability_groups = (_WEB_SIGNALS, _DATA_SIGNALS, _DOCUMENT_SIGNALS)
-    return sum(any(signal in latest for signal in group) for group in capability_groups) >= 2
+    if capability_count and any(signal in latest for signal in _SEQUENCE_SIGNALS):
+        return True
+    if capability_count and any(signal in latest for signal in _COMPLEX_SIGNALS):
+        return True
+    return (
+        len(user_messages) > 1
+        and capability_count > 0
+        and any(signal in latest for signal in _CONTEXT_SIGNALS)
+    )
 
 
 def cancel_agent_run(run_id: str, workspace_id: str) -> dict | None:
