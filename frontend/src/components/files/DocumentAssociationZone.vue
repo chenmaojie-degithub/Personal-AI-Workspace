@@ -149,12 +149,12 @@ onBeforeUnmount(() => { cancelLayoutAnimation(); cleanupDrag() })
 
 <template>
   <div class="relative flex min-w-0 justify-center">
-    <button ref="pill" type="button" class="flex h-8 min-w-0 max-w-56 items-center gap-1.5 rounded-full border border-white/10 bg-white/[.045] px-3 text-[11px] text-white/65 transition-colors hover:bg-white/[.08] hover:text-white/90"
+    <button ref="pill" type="button" class="flex h-8 w-72 max-w-full min-w-0 items-center gap-2 rounded-full border border-white/10 bg-white/[.045] px-3 text-[11px] text-white/65 transition-colors hover:bg-white/[.08] hover:text-white/90"
       :class="viewState !== 'collapsed' ? 'invisible' : ''" :aria-expanded="viewState !== 'collapsed'" @click="toggle">
       <Loader2 v-if="uploading || taskActive" class="size-3.5 shrink-0 animate-spin text-sky-300" />
       <Check v-else-if="taskComplete" class="size-3.5 shrink-0 text-emerald-300" />
       <FileText v-else class="size-3.5 shrink-0" />
-      <span class="truncate">Task documents · {{ modelValue.length }}</span><span class="hidden text-white/35 sm:inline">{{ statusLabel }}</span><ChevronUp class="size-3 shrink-0" />
+      <span class="min-w-0 flex-1 truncate text-left">Task documents · {{ modelValue.length }}</span><span class="hidden shrink-0 whitespace-nowrap text-white/35 sm:inline">{{ statusLabel }}</span><ChevronUp class="size-3 shrink-0" />
     </button>
     <section v-if="viewState !== 'collapsed'" ref="card" class="absolute bottom-full left-1/2 z-30 mb-3 flex max-h-[min(62vh,34rem)] w-[min(36rem,calc(100vw-1.5rem))] -translate-x-1/2 flex-col overflow-hidden rounded-[18px] border border-white/12 bg-[#15181e]/98 text-left text-xs text-white/65 shadow-[0_24px_70px_rgba(0,0,0,.52)] backdrop-blur-xl">
       <header class="flex shrink-0 items-center justify-between gap-3 border-b border-white/[.08] px-4 py-3">
