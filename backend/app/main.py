@@ -7,6 +7,7 @@ from app.core.config import settings
 from app.core.logging import configure_logging
 from app.api.routes.chat import router as chat_router
 from app.api.routes.chat_stream import router as chat_stream_router
+from app.api.routes.agents import router as agents_router
 from app.api.routes.files import router as files_router
 from app.api.routes.health import router as health_router
 from app.api.routes.history import router as history_router
@@ -33,6 +34,7 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(health_router)
+    app.include_router(agents_router)
     app.include_router(chat_router)
     app.include_router(chat_stream_router)
     app.include_router(files_router)

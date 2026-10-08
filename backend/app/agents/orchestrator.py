@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Iterator
+from threading import Event, Lock
 from typing import Any
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ from app.core.config import settings
 from app.core.database import (
     DEFAULT_WORKSPACE_ID,
     create_agent_run,
+    get_agent_run,
     save_chat_turn,
     update_agent_run,
     upsert_agent_step,
@@ -23,6 +25,12 @@ from app.tools.registry import execute_tool_call, get_enabled_tool_specs
 from app.tools.web_search import web_citations
 
 AgentEvent = tuple[str, object]
+_cancel_events: dict[str, Event] = {}
+_cancel_lock = Lock()
+
+
+class AgentCancelled(Exception):
+    pass
 
 _COMPLEX_SIGNALS = (
     "compare", "comparison", "report", "research", "investigate", "multi-step",
@@ -41,6 +49,27 @@ def should_run_agent(req: ChatRequest) -> bool:
         return True
     capability_groups = (_WEB_SIGNALS, _DATA_SIGNALS, _DOCUMENT_SIGNALS)
     return sum(any(signal in latest for signal in group) for group in capability_groups) >= 2
+
+
+def cancel_agent_run(run_id: str, workspace_id: str) -> dict | None:
+    run = get_agent_run(run_id, workspace_id)
+    if not run:
+        return None
+    if run["status"] in {"completed", "failed", "cancelled", "budget_exceeded"}:
+        return run
+    with _cancel_lock:
+        event = _cancel_events.get(run_id)
+        if event:
+            event.set()
+    update_agent_run(run_id, status="cancelled", error="user_cancelled", completed=True)
+    return get_agent_run(run_id, workspace_id)
+
+
+def _raise_if_cancelled(run_id: str) -> None:
+    with _cancel_lock:
+        event = _cancel_events.get(run_id)
+    if event and event.is_set():
+        raise AgentCancelled("user_cancelled")
 
 
 def _usage_sum(current: LLMUsage | None, incoming: LLMUsage | None) -> LLMUsage | None:
@@ -97,6 +126,8 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
     charts: list[ChartArtifact] = []
 
     create_agent_run(run_id, session_id, workspace_id, goal)
+    with _cancel_lock:
+        _cancel_events[run_id] = Event()
     try:
         yield "agent_run", {"run_id": run_id, "session_id": session_id, "goal": goal, "status": "planning"}
         req = resolve_workspace_request(req)
@@ -121,6 +152,7 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
             *({"role": item.role, "content": item.content} for item in req.messages),
         ]
         plan_response = provider.complete(planner_messages, tools=None)
+        _raise_if_cancelled(run_id)
         model_calls += 1
         provider_name, model_name = plan_response.provider, plan_response.model
         usage = _usage_sum(usage, plan_response.usage)
@@ -150,6 +182,7 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
         stop_reason: str | None = None
 
         while step_index < settings.agent_max_tool_steps:
+            _raise_if_cancelled(run_id)
             if model_calls >= settings.agent_max_model_calls:
                 stop_reason = "model_call_budget"
                 break
@@ -161,6 +194,7 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                 break
 
             response = provider.complete(messages, tools=tools)
+            _raise_if_cancelled(run_id)
             model_calls += 1
             provider_name, model_name = response.provider, response.model
             usage = _usage_sum(usage, response.usage) if usage_complete else None
@@ -182,6 +216,7 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                 ],
             })
             for call in response.tool_calls:
+                _raise_if_cancelled(run_id)
                 if step_index >= settings.agent_max_tool_steps:
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": json.dumps({"error": "Tool step budget exhausted"})})
                     continue
@@ -270,6 +305,10 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
         yield "agent_status", {"run_id": run_id, "status": status, "reason": stop_reason}
         yield "done", {"session_id": session_id, "agent_run_id": run_id}
         terminal = True
+    except AgentCancelled as exc:
+        update_agent_run(run_id, status="cancelled", error=str(exc), completed=True)
+        terminal = True
+        yield "agent_status", {"run_id": run_id, "status": "cancelled", "reason": str(exc)}
     except GeneratorExit:
         update_agent_run(run_id, status="cancelled", error="client_cancelled", completed=True)
         terminal = True
@@ -282,3 +321,5 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
     finally:
         if not terminal:
             update_agent_run(run_id, status="cancelled", error="stream_closed", completed=True)
+        with _cancel_lock:
+            _cancel_events.pop(run_id, None)

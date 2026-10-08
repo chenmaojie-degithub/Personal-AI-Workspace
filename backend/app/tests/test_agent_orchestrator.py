@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.agents.orchestrator import run_agent, should_run_agent
+from app.agents.orchestrator import cancel_agent_run, run_agent, should_run_agent
 from app.api.routes.chat_stream import _routed_events
 from app.core import database
 from app.models.chat import ChatMessage, ChatRequest, ChatSettings
@@ -114,6 +114,30 @@ class AgentOrchestratorTests(unittest.TestCase):
             iterator.close()
         self.assertEqual(database.get_agent_run(data["run_id"])["status"], "cancelled")
         self.assertEqual(provider.responses, [response('{"steps":["Search"]}')])
+
+    def test_cancel_endpoint_signal_stops_before_tool_execution(self) -> None:
+        provider = Provider(response('{"steps":["Search"]}'))
+        with patch("app.agents.orchestrator.create_llm_provider", return_value=provider):
+            iterator = run_agent(self.request("Research and compare sources"))
+            _, started = next(iterator)
+            cancelled = cancel_agent_run(started["run_id"], database.DEFAULT_WORKSPACE_ID)
+            remaining = list(iterator)
+        self.assertEqual(cancelled["status"], "cancelled")
+        self.assertTrue(any(event == "agent_status" and data["status"] == "cancelled" for event, data in remaining))
+        self.assertFalse(any(event == "tool_call" for event, _ in remaining))
+
+    def test_agent_run_routes_are_workspace_scoped(self) -> None:
+        run = database.create_agent_run("route-run", "route-session", database.DEFAULT_WORKSPACE_ID, "Goal")
+        from fastapi.testclient import TestClient
+        from app.main import create_app
+
+        client = TestClient(create_app())
+        latest = client.get("/agent-runs/latest", params={
+            "session_id": "route-session", "workspace_id": database.DEFAULT_WORKSPACE_ID,
+        })
+        self.assertEqual(latest.status_code, 200)
+        self.assertEqual(latest.json()["id"], run["id"])
+        self.assertEqual(client.get("/agent-runs/route-run", params={"workspace_id": "wrong"}).status_code, 404)
 
     def test_model_call_budget_returns_partial_answer(self) -> None:
         call = ProviderToolCall("call-1", "search_web", '{"query":"repeat"}')
