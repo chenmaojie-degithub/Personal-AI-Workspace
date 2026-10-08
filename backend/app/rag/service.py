@@ -77,11 +77,19 @@ class RAGService:
         return self._embedding_provider.embed(texts)
 
     @staticmethod
-    def _where(session_id: str, filename: str | None = None, workspace_id: str | None = None) -> dict[str, Any]:
+    def _where(
+        session_id: str,
+        filename: str | None = None,
+        workspace_id: str | None = None,
+        document_id: str | None = None,
+    ) -> dict[str, Any]:
         scope = {"workspace_id": workspace_id} if workspace_id else {"session_id": session_id}
+        filters = [scope]
         if filename:
-            return {"$and": [scope, {"filename": filename}]}
-        return scope
+            filters.append({"filename": filename})
+        if document_id:
+            filters.append({"document_id": document_id})
+        return filters[0] if len(filters) == 1 else {"$and": filters}
 
     @staticmethod
     def _chunk(content: str, metadata: dict[str, Any], distance: float | None) -> RAGChunk:
@@ -112,7 +120,7 @@ class RAGService:
             metadata = (document_metadata or {}).get(document["filename"], {})
             if metadata.get("document_id"):
                 document["document_id"] = metadata["document_id"]
-            document["metadata"] = metadata
+            document["metadata"] = {**document.get("metadata", {}), **metadata}
 
         # 2. Chunk documents
         chunks = chunk_documents(documents)
@@ -142,6 +150,8 @@ class RAGService:
                 "content_type": c.get("metadata", {}).get("content_type"),
                 "content_sha256": c.get("metadata", {}).get("content_sha256"),
                 "schema_version": c.get("metadata", {}).get("schema_version", 1),
+                "page_number": c.get("metadata", {}).get("page_number"),
+                "section": c.get("metadata", {}).get("section"),
             }
             meta = {k: v for k, v in raw_meta.items() if v is not None}
             metadatas.append(meta)
@@ -161,7 +171,15 @@ class RAGService:
             "stored": len(ids),
         }
 
-    def retrieve(self, session_id: str, query: str, top_k: int = 5, filename: str | None = None, workspace_id: str | None = None) -> list[RAGChunk]:
+    def retrieve(
+        self,
+        session_id: str,
+        query: str,
+        top_k: int = 5,
+        filename: str | None = None,
+        workspace_id: str | None = None,
+        document_id: str | None = None,
+    ) -> list[RAGChunk]:
         """
         Retrieve top-k relevant chunks for a query.
 
@@ -184,7 +202,7 @@ class RAGService:
         res = self.collection.query(
             query_embeddings=[q_emb],
             n_results=top_k,
-            where=self._where(session_id, filename, workspace_id),
+            where=self._where(session_id, filename, workspace_id, document_id),
             include=["documents", "metadatas", "distances"],
         )
 
@@ -196,6 +214,44 @@ class RAGService:
         for doc, meta, dist in zip(docs, metas, dists):
             out.append(self._chunk(doc, meta or {}, dist))
         return out
+
+    def read_document(
+        self,
+        session_id: str,
+        document_id: str,
+        *,
+        cursor: int = 0,
+        max_chars: int = 8_000,
+        workspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        cursor = max(0, int(cursor))
+        max_chars = max(500, min(int(max_chars), 12_000))
+        result = self.collection.get(
+            where=self._where(session_id, workspace_id=workspace_id, document_id=document_id),
+            include=["documents", "metadatas"],
+        )
+        items = sorted(
+            zip(result.get("documents") or [], result.get("metadatas") or []),
+            key=lambda item: int((item[1] or {}).get("chunk_index", 0)),
+        )
+        selected: list[dict[str, Any]] = []
+        total_chars = 0
+        next_cursor = cursor
+        for content, metadata in items[cursor:]:
+            if selected and total_chars + len(content) > max_chars:
+                break
+            selected.append({"content": content, **(metadata or {})})
+            total_chars += len(content)
+            next_cursor += 1
+        return {
+            "document_id": document_id,
+            "chunks": selected,
+            "cursor": cursor,
+            "next_cursor": next_cursor if next_cursor < len(items) else None,
+            "chunks_read": len(selected),
+            "total_chunks": len(items),
+            "complete": next_cursor >= len(items),
+        }
 
     def retrieve_all(
         self,

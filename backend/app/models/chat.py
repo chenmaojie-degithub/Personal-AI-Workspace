@@ -44,6 +44,8 @@ class CitationSource(BaseModel):
     filename: str | None = None
     document_id: str | None = None
     chunk_index: int | None = None
+    page_number: int | None = None
+    section: str | None = None
     content_preview: str | None = None
     distance: float | None = None
 

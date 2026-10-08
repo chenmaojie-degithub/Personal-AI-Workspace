@@ -116,6 +116,14 @@ def relevant_tool_specs(req: ChatRequest, specs: list[ToolSpec]) -> list[ToolSpe
             "generate_image", "generate an image", "create an image", "draw", "picture",
             "生成图片", "生成图像", "画一张", "绘画",
         ),
+        "search_knowledge": (
+            "search_knowledge", "document", "file", "pdf", "knowledge", "citation",
+            "文档", "文件", "知识库", "资料", "引用", "简历", "合同",
+        ),
+        "read_document": (
+            "read_document", "whole document", "entire document", "compare documents",
+            "全文", "整份", "完整文档", "对比文档", "多份文档", "长文档",
+        ),
     }
     return [
         spec
@@ -372,6 +380,8 @@ def orchestrate_chat(req: ChatRequest) -> ChatResponse:
                     filename=chunk.filename,
                     document_id=chunk.document_id,
                     chunk_index=chunk.chunk_index,
+                    page_number=chunk.metadata.get("page_number"),
+                    section=chunk.metadata.get("section"),
                     content_preview=" ".join(chunk.content.split())[:240],
                     distance=chunk.distance,
                 )

@@ -80,6 +80,8 @@ def _events(req: ChatRequest) -> Iterator[str]:
                         filename=chunk.filename,
                         document_id=chunk.document_id,
                         chunk_index=chunk.chunk_index,
+                        page_number=chunk.metadata.get("page_number"),
+                        section=chunk.metadata.get("section"),
                         content_preview=" ".join(chunk.content.split())[:240],
                         distance=chunk.distance,
                     )

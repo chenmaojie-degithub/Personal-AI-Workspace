@@ -8,6 +8,7 @@ from app.models.chat import ChatSettings
 from app.services.data_analysis import CHART_TYPES, OPERATIONS
 from app.tools.data_analysis import analyze_data
 from app.tools.image_generation import generate_image
+from app.tools.knowledge import read_document, search_knowledge
 from app.tools.web_search import web_search
 
 
@@ -101,6 +102,50 @@ def get_enabled_tool_specs(settings: ChatSettings, workspace_id: str | None = No
             )
         )
 
+    return specs
+
+
+def get_agent_tool_specs(
+    settings: ChatSettings,
+    session_id: str,
+    workspace_id: str | None = None,
+) -> list[ToolSpec]:
+    specs = get_enabled_tool_specs(settings, workspace_id)
+    specs.extend([
+        ToolSpec(
+            name="search_knowledge",
+            description="Search indexed documents in the current Workspace for relevant evidence.",
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "document_id": {"type": ["string", "null"]},
+                    "top_k": {"type": ["integer", "null"], "minimum": 1, "maximum": 10},
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+            handler=lambda **arguments: search_knowledge(session_id, workspace_id, **arguments),
+        ),
+        ToolSpec(
+            name="read_document",
+            description=(
+                "Read the next ordered segment of an indexed document in the current Workspace. "
+                "Continue with next_cursor until complete when whole-document coverage is required."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string"},
+                    "cursor": {"type": ["integer", "null"], "minimum": 0},
+                    "max_chars": {"type": ["integer", "null"], "minimum": 500, "maximum": 12000},
+                },
+                "required": ["document_id"],
+                "additionalProperties": False,
+            },
+            handler=lambda **arguments: read_document(session_id, workspace_id, **arguments),
+        ),
+    ])
     return specs
 
 

@@ -21,7 +21,8 @@ from app.models.chat import ChartArtifact, ChatRequest, CitationSource, ToolCall
 from app.providers.base import LLMResponse, LLMUsage
 from app.providers.factory import create_llm_provider
 from app.providers.registry import resolve_model
-from app.tools.registry import execute_tool_call, get_enabled_tool_specs
+from app.tools.knowledge import knowledge_citations
+from app.tools.registry import execute_tool_call, get_agent_tool_specs
 from app.tools.web_search import web_citations
 
 AgentEvent = tuple[str, object]
@@ -132,8 +133,7 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
         yield "agent_run", {"run_id": run_id, "session_id": session_id, "goal": goal, "status": "planning"}
         req = resolve_workspace_request(req)
         provider = create_llm_provider(req.model_id)
-        specs = relevant_tool_specs(req, get_enabled_tool_specs(req.settings, req.workspace_id))
-        specs = [spec for spec in specs if spec.name in {"search_web", "analyze_data"}]
+        specs = relevant_tool_specs(req, get_agent_tool_specs(req.settings, session_id, req.workspace_id))
         if specs and not resolve_model(req.model_id).supports_tools:
             raise RuntimeError(f"Model {req.model_id or 'default'} does not support Tool Calling")
         tool_map = {spec.name: spec for spec in specs}
@@ -241,6 +241,8 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                     log.output_preview = tool_content[:2000]
                     if call.name == "search_web" and isinstance(result, dict):
                         sources.extend(web_citations(result))
+                    if call.name in {"search_knowledge", "read_document"} and isinstance(result, dict):
+                        sources.extend(knowledge_citations(result))
                     if call.name == "analyze_data" and isinstance(result, dict) and result.get("type") == "chart":
                         charts.append(ChartArtifact(url=result["url"], title=result["title"]))
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": tool_content})
