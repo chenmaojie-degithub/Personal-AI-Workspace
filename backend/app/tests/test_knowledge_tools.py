@@ -92,6 +92,12 @@ class KnowledgeToolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "associated"):
             execute_tool_call(associated, "read_document", '{"document_id":"doc-2"}')
 
+    def test_agent_tool_clamps_model_generated_numeric_bounds(self) -> None:
+        specs = {item.name: item for item in get_agent_tool_specs(ChatSettings(), "session-1", "workspace-1")}
+        with patch("app.tools.registry.search_knowledge", return_value={"results": []}) as search:
+            execute_tool_call(specs, "search_knowledge", '{"query":"evidence","top_k":99}')
+        self.assertEqual(search.call_args.kwargs["top_k"], 10)
+
     def test_agent_searches_only_all_associated_documents(self) -> None:
         for name, document_id, content in [
             ("third.txt", "doc-3", "gamma associated evidence"),

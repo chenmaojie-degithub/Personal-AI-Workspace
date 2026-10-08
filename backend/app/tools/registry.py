@@ -204,6 +204,6 @@ def _validate_arguments(schema: dict[str, Any], args: dict[str, Any]) -> None:
             raise ValueError(f"Tool argument {name} has an invalid value")
         if isinstance(value, int) and not isinstance(value, bool):
             if "minimum" in rule and value < rule["minimum"]:
-                raise ValueError(f"Tool argument {name} is below the minimum")
+                args[name] = rule["minimum"]
             if "maximum" in rule and value > rule["maximum"]:
-                raise ValueError(f"Tool argument {name} exceeds the maximum")
+                args[name] = rule["maximum"]
