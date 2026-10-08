@@ -56,7 +56,7 @@ def cancel_agent_run(run_id: str, workspace_id: str) -> dict | None:
     run = get_agent_run(run_id, workspace_id)
     if not run:
         return None
-    if run["status"] in {"completed", "failed", "cancelled", "budget_exceeded"}:
+    if run["status"] in {"completed", "partial", "failed", "cancelled", "budget_exceeded"}:
         return run
     with _cancel_lock:
         event = _cancel_events.get(run_id)
@@ -106,6 +106,22 @@ def _tool_content(result: object, limit: int) -> str:
     if len(serialized) <= limit:
         return serialized
     return json.dumps({"truncated": True, "preview": serialized[:limit]}, ensure_ascii=False)
+
+
+def _execution_limit_reason(started: float, model_calls: int, budget_tokens: int) -> str | None:
+    if model_calls >= settings.agent_max_model_calls:
+        return "model_call_budget"
+    if budget_tokens >= settings.agent_token_budget:
+        return "token_budget"
+    if time.monotonic() - started >= settings.agent_timeout_seconds:
+        return "timeout"
+    return None
+
+
+def _set_plan_step(plan: list[dict[str, object]], index: int, title: str, status: str) -> None:
+    while len(plan) < index:
+        plan.append({"index": len(plan) + 1, "title": title, "status": "pending"})
+    plan[index - 1]["status"] = status
 
 
 def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
@@ -190,16 +206,13 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
 
         while step_index < settings.agent_max_tool_steps:
             _raise_if_cancelled(run_id)
-            if model_calls >= settings.agent_max_model_calls:
-                stop_reason = "model_call_budget"
-                break
-            if budget_tokens >= settings.agent_token_budget:
-                stop_reason = "token_budget"
-                break
-            if time.monotonic() - started >= settings.agent_timeout_seconds:
-                stop_reason = "timeout"
+            stop_reason = _execution_limit_reason(started, model_calls, budget_tokens)
+            if stop_reason:
                 break
 
+            if step_index:
+                update_agent_run(run_id, status="replanning", plan=plan, usage=usage if usage_complete else None)
+                yield "agent_status", {"run_id": run_id, "status": "replanning", "reason": None}
             response = provider.complete(messages, tools=tools)
             _raise_if_cancelled(run_id)
             model_calls += 1
@@ -210,9 +223,22 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                 usage = None
             budget_tokens += response.usage.total_tokens if response.usage else _estimated_tokens(messages, response)
 
+            response_limit = None
+            if budget_tokens >= settings.agent_token_budget:
+                response_limit = "token_budget"
+            elif time.monotonic() - started >= settings.agent_timeout_seconds:
+                response_limit = "timeout"
+
             if not response.tool_calls:
                 content = response.content.strip()
+                stop_reason = response_limit
                 break
+            if response_limit:
+                stop_reason = response_limit
+                break
+
+            update_agent_run(run_id, status="running", plan=plan, usage=usage if usage_complete else None)
+            yield "agent_status", {"run_id": run_id, "status": "running", "reason": None}
 
             messages.append({
                 "role": "assistant",
@@ -236,6 +262,9 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                     input_data = None
                 signature = f"{call.name}:{json.dumps(input_data, sort_keys=True, ensure_ascii=False)}"
                 signatures[signature] = signatures.get(signature, 0) + 1
+                _set_plan_step(plan, step_index, title, "running")
+                update_agent_run(run_id, plan=plan)
+                yield "agent_plan", {"run_id": run_id, "goal": goal, "steps": plan}
                 upsert_agent_step(run_id, step_index, title, "running", tool_name=call.name, input_data=input_data)
                 yield "agent_step", {"run_id": run_id, "index": step_index, "title": title, "tool": call.name, "status": "running"}
 
@@ -244,6 +273,7 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                     if signatures[signature] > settings.agent_repeat_limit:
                         raise RuntimeError("Repeated tool call limit reached")
                     result = execute_tool_call(tool_map, call.name, call.arguments)
+                    _raise_if_cancelled(run_id)
                     tool_content = _tool_content(result, settings.agent_tool_result_max_chars)
                     log.output_preview = tool_content[:2000]
                     if call.name == "search_web" and isinstance(result, dict):
@@ -257,7 +287,15 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                         run_id, step_index, title, "completed", tool_name=call.name,
                         input_data=input_data, output_preview=tool_content,
                     )
+                    _set_plan_step(plan, step_index, title, "completed")
+                    update_agent_run(run_id, plan=plan)
                     yield "agent_step", {"run_id": run_id, "index": step_index, "title": title, "tool": call.name, "status": "completed"}
+                    yield "agent_observation", {
+                        "run_id": run_id, "index": step_index, "tool": call.name,
+                        "status": "completed", "output_preview": tool_content[:2000],
+                    }
+                except AgentCancelled:
+                    raise
                 except Exception as exc:
                     log.error = f"{type(exc).__name__}: {exc}"
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": json.dumps({"error": log.error, "tool": call.name})})
@@ -265,8 +303,20 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                         run_id, step_index, title, "failed", tool_name=call.name,
                         input_data=input_data, error=log.error,
                     )
+                    _set_plan_step(plan, step_index, title, "failed")
+                    update_agent_run(run_id, plan=plan)
                     yield "agent_step", {"run_id": run_id, "index": step_index, "title": title, "tool": call.name, "status": "failed", "error": log.error}
+                    yield "agent_observation", {
+                        "run_id": run_id, "index": step_index, "tool": call.name,
+                        "status": "failed", "error": log.error,
+                    }
                 yield "tool_call", log.model_dump()
+                if time.monotonic() - started >= settings.agent_timeout_seconds:
+                    stop_reason = "timeout"
+                    break
+
+            if stop_reason:
+                break
 
         if not content:
             if stop_reason is None:
@@ -285,17 +335,19 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                     ),
                 })
                 response = provider.complete(messages, tools=None)
+                _raise_if_cancelled(run_id)
                 model_calls += 1
                 provider_name, model_name = response.provider, response.model
                 usage = _usage_sum(usage, response.usage) if usage_complete else None
                 if response.usage is None:
                     usage_complete = False
                     usage = None
+                budget_tokens += response.usage.total_tokens if response.usage else _estimated_tokens(messages, response)
                 content = response.content.strip()
             if not content:
                 content = f"Agent stopped because the {stop_reason} limit was reached before a final answer was available."
 
-        status = "budget_exceeded" if stop_reason else "completed"
+        status = "partial" if stop_reason and step_index else "budget_exceeded" if stop_reason else "completed"
         update_agent_run(
             run_id, status=status, provider=provider_name, model=model_name,
             usage=usage if usage_complete else None, error=stop_reason, completed=True,

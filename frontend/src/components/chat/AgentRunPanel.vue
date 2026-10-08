@@ -4,7 +4,7 @@ import { Check, Circle, Loader2, X } from 'lucide-vue-next'
 import type { AgentRun } from '@/lib/chat'
 
 const props = defineProps<{ run: AgentRun }>()
-const terminal = computed(() => ['completed', 'failed', 'cancelled', 'budget_exceeded'].includes(props.run.status))
+const terminal = computed(() => ['completed', 'partial', 'failed', 'cancelled', 'budget_exceeded'].includes(props.run.status))
 function statusFor(index: number) {
   return props.run.steps.find(item => item.step_index === index)?.status ?? 'pending'
 }

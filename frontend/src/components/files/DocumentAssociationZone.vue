@@ -27,7 +27,7 @@ let detailsAnimation: Animation | null = null
 let transitionId = 0
 
 const associatedDocuments = computed(() => props.modelValue.map(id => documents.value.find(item => item.document_id === id)).filter(Boolean) as DocumentItem[])
-const taskActive = computed(() => ['planning', 'running'].includes(props.agentRun?.status ?? ''))
+const taskActive = computed(() => ['planning', 'running', 'replanning'].includes(props.agentRun?.status ?? ''))
 const taskComplete = computed(() => props.agentRun?.status === 'completed')
 const failed = computed(() => documents.value.some(item => item.status === 'failed') || props.agentRun?.status === 'failed')
 const statusLabel = computed(() => {
@@ -35,6 +35,7 @@ const statusLabel = computed(() => {
   if (taskActive.value) return 'Running'
   if (failed.value) return 'Failed'
   if (documents.value.some(item => ['uploaded', 'parsing'].includes(item.status))) return 'Parsing'
+  if (props.agentRun?.status === 'partial') return 'Partially completed'
   if (taskComplete.value) return 'Completed'
   if (associatedDocuments.value.length) return 'Indexed'
   return 'No documents'

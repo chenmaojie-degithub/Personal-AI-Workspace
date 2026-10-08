@@ -348,6 +348,14 @@ function createChat() {
           if (index === -1) agentRun.value.steps.push(step)
           else agentRun.value.steps[index] = step
         }
+        else if (event === 'agent_observation' && agentRun.value) {
+          const step = agentRun.value.steps.find(item => item.step_index === data.index)
+          if (step) {
+            step.status = data.status as string
+            step.output_preview = data.output_preview as string | undefined
+            step.error = data.error as string | undefined
+          }
+        }
         else if (event === 'agent_status' && agentRun.value) {
           agentRun.value.status = data.status as string
           agentRun.value.error = data.reason as string | null

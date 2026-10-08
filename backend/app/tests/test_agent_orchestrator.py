@@ -61,16 +61,26 @@ class AgentOrchestratorTests(unittest.TestCase):
     def test_two_tools_observations_and_usage_are_persisted(self) -> None:
         search = ProviderToolCall("call-1", "search_web", '{"query":"release"}')
         analyze = ProviderToolCall("call-2", "analyze_data", '{"file_id":"sales.csv","operation":"shape"}')
-        provider = Provider(
+        class AdaptiveProvider(Provider):
+            def complete(self, messages, tools=None):
+                if len(self.tools) == 2:
+                    self.assert_observation(messages, "Evidence")
+                if len(self.tools) == 3:
+                    self.assert_observation(messages, '"rows": 3')
+                return super().complete(messages, tools)
+
+            @staticmethod
+            def assert_observation(messages, expected):
+                assert any(item.get("role") == "tool" and expected in item.get("content", "") for item in messages)
+
+        provider = AdaptiveProvider(
             response('{"steps":["Find current evidence","Inspect the data"]}', tokens=5),
-            response("", (search,), 7),
-            response("", (analyze,), 11),
-            response("Final comparison", tokens=13),
+            response("", (search,), 7), response("", (analyze,), 11), response("Final comparison", tokens=13),
         )
         req = self.request("Compare latest web news with sales.csv data", web_search=True, data_analysis=True)
         with patch("app.agents.orchestrator.create_llm_provider", return_value=provider), patch(
-            "app.tools.web_search.search_web", return_value=[{"title": "Real", "url": "https://example.com", "snippet": "Evidence"}]
-        ), patch("app.tools.data_analysis.analyze_data", return_value={"type": "table", "rows": 3}), patch(
+            "app.tools.registry.web_search", return_value={"query": "release", "results": [{"title": "Real", "url": "https://example.com", "snippet": "Evidence"}]}
+        ), patch("app.tools.registry.analyze_data", return_value={"type": "table", "rows": 3}), patch(
             "app.agents.orchestrator.resolve_model"
         ) as model:
             model.return_value.supports_tools = True
@@ -78,6 +88,8 @@ class AgentOrchestratorTests(unittest.TestCase):
 
         self.assertEqual([data["status"] for event, data in events if event == "agent_step"], ["running", "completed", "running", "completed"])
         self.assertEqual([event for event, _ in events].count("tool_call"), 2)
+        self.assertEqual([event for event, _ in events].count("agent_observation"), 2)
+        self.assertEqual([data["status"] for event, data in events if event == "agent_status"].count("replanning"), 2)
         self.assertEqual([data["type"] for event, data in events if event == "source"], ["web"])
         self.assertEqual([data for event, data in events if event == "message"][0]["content"], "Final comparison")
         run_id = next(data["run_id"] for event, data in events if event == "agent_run")
@@ -85,12 +97,13 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertEqual(stored["status"], "completed")
         self.assertEqual(stored["total_tokens"], 36)
         self.assertEqual(len(stored["steps"]), 2)
+        self.assertEqual([item["status"] for item in stored["plan"]], ["completed", "completed"])
 
     def test_tool_failure_is_an_observation_and_does_not_crash(self) -> None:
         call = ProviderToolCall("call-1", "search_web", '{"query":"blocked"}')
         provider = Provider(response('{"steps":["Search"]}'), response("", (call,)), response("Explain failure"))
         with patch("app.agents.orchestrator.create_llm_provider", return_value=provider), patch(
-            "app.tools.web_search.search_web", side_effect=RuntimeError("network blocked")
+            "app.tools.registry.web_search", side_effect=RuntimeError("network blocked")
         ), patch("app.agents.orchestrator.resolve_model") as model:
             model.return_value.supports_tools = True
             events = list(run_agent(self.request("Research the latest web report", web_search=True)))
@@ -146,15 +159,16 @@ class AgentOrchestratorTests(unittest.TestCase):
         req = self.request("Research and compare web sources", web_search=True)
         with patch.object(database.settings, "agent_max_model_calls", 3), patch(
             "app.agents.orchestrator.create_llm_provider", return_value=provider
-        ), patch("app.tools.web_search.search_web", return_value=[]), patch(
+        ), patch("app.tools.registry.web_search", return_value={"query": "repeat", "results": []}), patch(
             "app.agents.orchestrator.resolve_model"
         ) as model:
             model.return_value.supports_tools = True
             events = list(run_agent(req))
-        status = next(data for event, data in events if event == "agent_status")
-        self.assertEqual(status["status"], "budget_exceeded")
+        status = [data for event, data in events if event == "agent_status"][-1]
+        self.assertEqual(status["status"], "partial")
         self.assertEqual(status["reason"], "model_call_budget")
         self.assertTrue(any(event == "message" for event, _ in events))
+        self.assertEqual(cancel_agent_run(status["run_id"], database.DEFAULT_WORKSPACE_ID)["status"], "partial")
 
     def test_tool_step_budget_stops_after_configured_limit(self) -> None:
         calls = tuple(
@@ -168,14 +182,46 @@ class AgentOrchestratorTests(unittest.TestCase):
         )
         with patch.object(database.settings, "agent_max_tool_steps", 2), patch(
             "app.agents.orchestrator.create_llm_provider", return_value=provider
-        ), patch("app.tools.web_search.search_web", return_value=[]), patch(
+        ), patch("app.tools.registry.web_search", return_value={"query": "test", "results": []}), patch(
             "app.agents.orchestrator.resolve_model"
         ) as model:
             model.return_value.supports_tools = True
             events = list(run_agent(self.request("Research and compare web sources", web_search=True)))
         self.assertEqual(len([1 for event, data in events if event == "agent_step" and data["status"] == "completed"]), 2)
-        status = next(data for event, data in events if event == "agent_status")
-        self.assertEqual((status["status"], status["reason"]), ("budget_exceeded", "tool_step_budget"))
+        status = [data for event, data in events if event == "agent_status"][-1]
+        self.assertEqual((status["status"], status["reason"]), ("partial", "tool_step_budget"))
+
+    def test_response_that_crosses_token_budget_is_not_marked_completed(self) -> None:
+        provider = Provider(response('{"steps":["Answer"]}', tokens=5), response("Final answer", tokens=50))
+        with patch.object(database.settings, "agent_token_budget", 40), patch(
+            "app.agents.orchestrator.create_llm_provider", return_value=provider
+        ):
+            events = list(run_agent(self.request("Research and compare sources")))
+        status = [data for event, data in events if event == "agent_status"][-1]
+        self.assertEqual((status["status"], status["reason"]), ("budget_exceeded", "token_budget"))
+        self.assertEqual(database.get_agent_run(status["run_id"])["status"], "budget_exceeded")
+
+    def test_response_that_crosses_time_budget_stops_before_tool(self) -> None:
+        call = ProviderToolCall("call-1", "search_web", '{"query":"late"}')
+        clock = [0.0]
+
+        class SlowProvider(Provider):
+            def complete(self, messages, tools=None):
+                result = super().complete(messages, tools)
+                if len(self.tools) == 2:
+                    clock[0] = 5.0
+                return result
+
+        provider = SlowProvider(response('{"steps":["Search"]}'), response("", (call,)))
+        with patch.object(database.settings, "agent_timeout_seconds", 2), patch(
+            "app.agents.orchestrator.create_llm_provider", return_value=provider
+        ), patch("app.agents.orchestrator.time.monotonic", side_effect=lambda: clock[0]), patch(
+            "app.tools.registry.web_search"
+        ) as search_web:
+            events = list(run_agent(self.request("Research and compare web sources", web_search=True)))
+        status = [data for event, data in events if event == "agent_status"][-1]
+        self.assertEqual((status["status"], status["reason"]), ("budget_exceeded", "timeout"))
+        search_web.assert_not_called()
 
 
 if __name__ == "__main__":
