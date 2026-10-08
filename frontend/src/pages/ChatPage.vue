@@ -5,6 +5,7 @@ import { Pencil, Plus, Settings } from 'lucide-vue-next'
 import MessageList from '@/components/chat/MessageList.vue'
 import MessageComposer from '@/components/chat/MessageComposer.vue'
 import AttachmentChips from '@/components/chat/AttachmentChips.vue'
+import AgentRunPanel from '@/components/chat/AgentRunPanel.vue'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
 import CapabilitiesCard from '@/components/settings/CapabilitiesCard.vue'
 import DocumentDropZone from '@/components/files/DocumentDropZone.vue'
@@ -270,6 +271,7 @@ async function onUpload(files: File[]) {
               aria-label="重命名当前聊天" title="重命名当前聊天" @click="startTitleEdit"><Pencil class="size-3" /></button>
           </template>
         </div>
+        <AgentRunPanel v-if="chat.agentRun.value" :run="chat.agentRun.value" />
         <MessageList :messages="chat.messages.value ?? []" :is-loading="chat.isLoading.value" />
         <div v-if="chat.lastError.value" class="mt-6 rounded-xl border border-red-400/20 bg-red-400/5 p-3 text-sm text-red-300">{{ chat.lastError.value }}</div>
       </div>
