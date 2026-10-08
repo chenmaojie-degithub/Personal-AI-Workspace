@@ -52,11 +52,11 @@ class OpenRouterTests(unittest.TestCase):
         req = ChatRequest(messages=[ChatMessage(role="user", content="Find current OpenAI news")], settings=ChatSettings(web_search=True))
         with patch("app.api.routes.chat_stream.create_llm_provider", return_value=provider), patch(
             "app.api.routes.chat_stream._should_use_rag", return_value=True
-        ), patch("app.api.routes.chat_stream.RAGService") as rag, patch(
+        ), patch("app.api.routes.chat_stream.get_rag_service") as rag_factory, patch(
             "app.api.routes.chat_stream.save_chat_turn"
         ), patch("app.services.web_search.DDGS") as ddgs:
             ddgs.return_value.text.return_value = ddgs_results
-            rag.return_value.retrieve.return_value = [RAGChunk("Local notes", "README.md", "doc-1", 3, 0.1)]
+            rag_factory.return_value.retrieve.return_value = [RAGChunk("Local notes", "README.md", "doc-1", 3, 0.1)]
             events = [(line.split("\n")[0].removeprefix("event: "), json.loads(line.split("data: ", 1)[1])) for line in _events(req)]
 
         messages = [data["content"] for kind, data in events if kind == "message"]

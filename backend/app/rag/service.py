@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,25 @@ from app.rag.models import RAGChunk
 
 import chromadb
 from chromadb.config import Settings as ChromaSettings
+
+
+@lru_cache(maxsize=8)
+def _cached_rag_service(config_key: tuple[str, ...]) -> "RAGService":
+    return RAGService()
+
+
+def get_rag_service() -> "RAGService":
+    """Reuse the expensive Chroma and embedding clients while settings stay unchanged."""
+    return _cached_rag_service((
+        str(Path(settings.chroma_persist_dir).resolve()),
+        settings.chroma_collection,
+        settings.embedding_provider,
+        settings.local_embedding_model,
+        str(Path(settings.local_embedding_cache_dir).resolve()),
+        settings.openai_embedding_base_url or "",
+        settings.openai_embedding_model,
+        "configured" if settings.openai_embedding_api_key else "unconfigured",
+    ))
 
 
 class RAGService:

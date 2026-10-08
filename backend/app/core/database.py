@@ -5,6 +5,7 @@ import json
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Iterator
 from uuid import uuid4
 
@@ -12,6 +13,8 @@ from app.core.config import settings
 from app.providers.base import LLMUsage
 
 DEFAULT_WORKSPACE_ID = "00000000-0000-0000-0000-000000000001"
+_initialized_databases: set[str] = set()
+_schema_lock = Lock()
 
 _SCHEMA_TEMPLATE = """
 CREATE TABLE IF NOT EXISTS chat_messages (
@@ -89,6 +92,27 @@ def _sqlite_path(database_url: str) -> Path:
     return Path(path).resolve()
 
 
+def _initialize_schema(connection, placeholder: str, id_type: str, database_key: str) -> None:
+    if database_key in _initialized_databases:
+        return
+    with _schema_lock:
+        if database_key in _initialized_databases:
+            return
+        schema = _SCHEMA_TEMPLATE.format(id_type=id_type)
+        if placeholder == "?":
+            connection.executescript(schema)
+            if "title" not in {row["name"] for row in connection.execute("PRAGMA table_info(chat_sessions)")}:
+                connection.execute("ALTER TABLE chat_sessions ADD COLUMN title TEXT")
+        else:
+            for statement in schema.split(";"):
+                if statement.strip():
+                    connection.execute(statement)
+            connection.execute("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS title TEXT")
+        _ensure_default_workspace(connection, placeholder)
+        connection.commit()
+        _initialized_databases.add(database_key)
+
+
 def _connect():
     database_url = settings.effective_database_url
     if database_url.startswith("sqlite:///"):
@@ -96,12 +120,7 @@ def _connect():
         database_path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(database_path, timeout=30)
         connection.row_factory = sqlite3.Row
-        connection.executescript(
-            _SCHEMA_TEMPLATE.format(id_type="INTEGER PRIMARY KEY AUTOINCREMENT")
-        )
-        if "title" not in {row["name"] for row in connection.execute("PRAGMA table_info(chat_sessions)")}:
-            connection.execute("ALTER TABLE chat_sessions ADD COLUMN title TEXT")
-        _ensure_default_workspace(connection, "?")
+        _initialize_schema(connection, "?", "INTEGER PRIMARY KEY AUTOINCREMENT", database_url)
         return connection, "?"
 
     if database_url.startswith(("postgresql://", "postgres://")):
@@ -117,12 +136,7 @@ def _connect():
         if settings.postgres_target_password:
             connect_kwargs["password"] = settings.postgres_target_password
         connection = psycopg.connect(database_url, **connect_kwargs)
-        schema = _SCHEMA_TEMPLATE.format(id_type="BIGSERIAL PRIMARY KEY")
-        for statement in schema.split(";"):
-            if statement.strip():
-                connection.execute(statement)
-        connection.execute("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS title TEXT")
-        _ensure_default_workspace(connection, "%s")
+        _initialize_schema(connection, "%s", "BIGSERIAL PRIMARY KEY", database_url)
         return connection, "%s"
 
     raise RuntimeError(

@@ -133,7 +133,7 @@ class DataAnalysisTests(unittest.TestCase):
 
         req = ChatRequest(
             workspace_id=self.workspace,
-            messages=[ChatMessage(role="user", content="生成成绩图")],
+            messages=[ChatMessage(role="user", content="generate a score chart")],
             settings=ChatSettings(data_analysis=True),
         )
         with patch("app.api.routes.chat_stream.resolve_workspace_request", side_effect=lambda value: value), patch(
