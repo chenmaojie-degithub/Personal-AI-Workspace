@@ -68,10 +68,11 @@ async function expand() {
   const element = card.value
   const destination = element?.getBoundingClientRect()
   if (!element || !origin || !destination || reducedMotion()) { if (id === transitionId) viewState.value = 'expanded'; return }
+  const offsetY = origin.bottom - destination.bottom
   layoutAnimation = element.animate([
-    { transform: `translateX(-50%) translate(${origin.left - destination.left}px, ${origin.top - destination.top}px) scale(${origin.width / destination.width}, ${origin.height / destination.height})`, borderRadius: '999px', opacity: .72 },
-    { transform: 'translateX(-50%) translate(0, 0) scale(1)', borderRadius: '18px', opacity: 1 },
-  ], { duration: 260, easing: 'cubic-bezier(.2,.8,.2,1)', composite: 'replace' })
+    { transform: `translateX(-50%) translateY(${offsetY}px) scale(${origin.width / destination.width}, ${origin.height / destination.height})`, transformOrigin: 'bottom center', borderRadius: '999px', opacity: .88 },
+    { transform: 'translateX(-50%) translateY(0) scale(1)', transformOrigin: 'bottom center', borderRadius: '18px', opacity: 1 },
+  ], { duration: 480, easing: 'cubic-bezier(.22,1,.36,1)', composite: 'replace' })
   try { await layoutAnimation.finished } catch { return }
   if (id === transitionId) { layoutAnimation = null; viewState.value = 'expanded' }
 }
@@ -80,7 +81,10 @@ async function collapse() {
   const id = transitionId
   viewState.value = 'collapsing'
   if (!reducedMotion() && details.value) {
-    detailsAnimation = details.value.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 100, easing: 'ease-out' })
+    detailsAnimation = details.value.animate(
+      [{ opacity: 1, transform: 'translateY(0)' }, { opacity: 0, transform: 'translateY(6px)' }],
+      { duration: 180, easing: 'cubic-bezier(.4,0,.6,1)', fill: 'forwards' },
+    )
     try { await detailsAnimation.finished } catch { return }
     detailsAnimation = null
   }
@@ -89,10 +93,11 @@ async function collapse() {
   const from = element?.getBoundingClientRect()
   const destination = pill.value?.getBoundingClientRect()
   if (!element || !from || !destination || reducedMotion()) { if (id === transitionId) viewState.value = 'collapsed'; return }
+  const offsetY = destination.bottom - from.bottom
   layoutAnimation = element.animate([
-    { transform: 'translateX(-50%) translate(0, 0) scale(1)', borderRadius: '18px', opacity: 1 },
-    { transform: `translateX(-50%) translate(${destination.left - from.left}px, ${destination.top - from.top}px) scale(${destination.width / from.width}, ${destination.height / from.height})`, borderRadius: '999px', opacity: .65 },
-  ], { duration: 230, easing: 'cubic-bezier(.4,0,.2,1)', composite: 'replace' })
+    { transform: 'translateX(-50%) translateY(0) scale(1)', transformOrigin: 'bottom center', borderRadius: '18px', opacity: 1 },
+    { transform: `translateX(-50%) translateY(${offsetY}px) scale(${destination.width / from.width}, ${destination.height / from.height})`, transformOrigin: 'bottom center', borderRadius: '999px', opacity: .88 },
+  ], { duration: 420, easing: 'cubic-bezier(.4,0,.2,1)', composite: 'replace' })
   try { await layoutAnimation.finished } catch { return }
   if (id === transitionId) { layoutAnimation = null; viewState.value = 'collapsed' }
 }
@@ -192,7 +197,7 @@ onBeforeUnmount(() => { cancelLayoutAnimation(); cleanupDrag() })
 </template>
 
 <style scoped>
-.task-details-enter { animation: task-details-in 140ms 110ms ease-out both; }
+.task-details-enter { animation: task-details-in 220ms 210ms cubic-bezier(.22,1,.36,1) both; }
 @keyframes task-details-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .task-details-enter { animation: none; } }
 </style>
