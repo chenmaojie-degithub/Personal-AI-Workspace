@@ -170,6 +170,29 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertTrue(any(event == "agent_status" and data["status"] == "cancelled" for event, data in remaining))
         save.assert_not_called()
 
+    def test_budget_partial_answer_uses_provider_stream(self) -> None:
+        call = ProviderToolCall("call-1", "search_web", '{"query":"evidence"}')
+        provider = StreamingProvider(
+            response('{"steps":["Search"]}'), response("", (call,)),
+            stream_events=[
+                LLMStreamEvent("message", content="Partial "),
+                LLMStreamEvent("message", content="summary"),
+                LLMStreamEvent("usage", usage=LLMUsage(9, 2, 11)),
+                LLMStreamEvent("done", model="test-model", provider="test-provider"),
+            ],
+        )
+        with patch.object(database.settings, "agent_max_tool_steps", 1), patch(
+            "app.agents.orchestrator.create_llm_provider", return_value=provider
+        ), patch("app.tools.registry.web_search", return_value={"query": "evidence", "results": []}), patch(
+            "app.agents.orchestrator.resolve_model"
+        ) as model, patch("app.agents.orchestrator.save_chat_turn") as save:
+            model.return_value.supports_tools = True
+            events = list(run_agent(self.request("Research current web evidence", web_search=True)))
+        self.assertEqual([data["content"] for event, data in events if event == "message"], ["Partial ", "summary"])
+        self.assertEqual([data for event, data in events if event == "agent_status"][-1]["status"], "partial")
+        save.assert_called_once()
+        self.assertEqual(save.call_args.args[2], "Partial summary")
+
     def test_two_tools_observations_and_usage_are_persisted(self) -> None:
         search = ProviderToolCall("call-1", "search_web", '{"query":"release"}')
         analyze = ProviderToolCall("call-2", "analyze_data", '{"file_id":"sales.csv","operation":"shape"}')

@@ -497,10 +497,42 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                 max_tokens = _completion_budget(messages, None, budget_tokens)
                 if max_tokens <= 0:
                     response = None
+                elif hasattr(provider, "stream"):
+                    response = None
+                    final_usage = None
+                    final_parts = []
+                    stream = provider.stream(messages, tools=None, max_tokens=max_tokens)
+                    model_calls += 1
+                    try:
+                        for event in stream:
+                            _raise_if_cancelled(run_id)
+                            if event.type == "message":
+                                final_parts.append(event.content)
+                                final_streamed = True
+                                yield "message", {"content": event.content}
+                            elif event.type == "usage":
+                                final_usage = event.usage
+                            elif event.type == "tool_call":
+                                raise RuntimeError("Partial answer stream attempted an unexpected tool call")
+                            elif event.type == "done":
+                                provider_name, model_name = event.provider, event.model
+                    finally:
+                        close = getattr(stream, "close", None)
+                        if close:
+                            close()
+                    content = "".join(final_parts).strip()
+                    usage = _usage_sum(usage, final_usage) if usage_complete else None
+                    if final_usage is None:
+                        usage_complete = False
+                        usage = None
+                        budget_tokens += max(1, len(content) // 4)
+                    else:
+                        budget_tokens += final_usage.total_tokens
                 else:
                     response = provider.complete(messages, tools=None, max_tokens=max_tokens)
                 if response is None:
-                    content = f"Agent stopped because the {stop_reason} limit was reached before a final answer was available."
+                    if not content:
+                        content = f"Agent stopped because the {stop_reason} limit was reached before a final answer was available."
                 else:
                     _raise_if_cancelled(run_id)
                     model_calls += 1
