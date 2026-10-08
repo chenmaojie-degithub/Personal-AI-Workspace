@@ -263,9 +263,17 @@ def save_chat_turn(
             if existing and existing["workspace_id"] != resolved_workspace:
                 raise ValueError("Session belongs to a different workspace")
             if not existing:
+                last_position = cursor.execute(
+                    f"""SELECT COALESCE(MAX(position), -1) AS position FROM (
+                        SELECT position FROM chat_sessions WHERE workspace_id = {placeholder} AND folder_id IS NULL
+                        UNION ALL
+                        SELECT position FROM project_folders WHERE workspace_id = {placeholder} AND parent_id IS NULL
+                    ) AS root_items""",
+                    (resolved_workspace, resolved_workspace),
+                ).fetchone()["position"]
                 cursor.execute(
-                    f"INSERT INTO chat_sessions (session_id, workspace_id, created_at, updated_at) VALUES ({', '.join([placeholder] * 4)})",
-                    (session_id, resolved_workspace, created_at, created_at),
+                    f"INSERT INTO chat_sessions (session_id, workspace_id, position, created_at, updated_at) VALUES ({', '.join([placeholder] * 5)})",
+                    (session_id, resolved_workspace, last_position + 1, created_at, created_at),
                 )
             cursor.executemany(
                 f"INSERT INTO chat_messages (session_id, role, content, created_at) VALUES ({', '.join([placeholder] * 4)})",

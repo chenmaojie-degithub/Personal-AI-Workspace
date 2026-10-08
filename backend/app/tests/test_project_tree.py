@@ -54,6 +54,8 @@ class ProjectTreeTests(unittest.TestCase):
         refreshed = self.client.get("/projects/tree", params={"workspace_id": self.workspace["id"]}).json()
         self.assertEqual(next(item for item in refreshed["folders"] if item["id"] == child["id"])["parent_id"], parent["id"])
         self.assertEqual(next(item for item in refreshed["sessions"] if item["session_id"] == "two")["folder_id"], child["id"])
+        root = next(item for item in refreshed["sessions"] if item["session_id"] == "one")
+        self.assertGreaterEqual(root["position"], 0)
 
     def test_rejects_cross_workspace_and_folder_cycles(self) -> None:
         parent = self.add_folder("Parent")
