@@ -159,6 +159,36 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertTrue(any(event == "message" and data["content"] == "Explain failure" for event, data in events))
         self.assertFalse(any(event == "error" for event, _ in events))
 
+    def test_observation_can_replace_skip_and_add_public_plan_steps(self) -> None:
+        first = ProviderToolCall("call-1", "search_web", '{"query":"broad"}')
+        second = ProviderToolCall("call-2", "search_web", '{"query":"official"}')
+        provider = Provider(
+            response('{"steps":["Search broadly","Analyze weak lead","Draft answer"]}'),
+            response("", (first,)),
+            response('{"plan_update":{"remaining_steps":["Verify official source","Draft answer"]}}', (second,)),
+            response("Verified answer"),
+        )
+        with patch("app.agents.orchestrator.create_llm_provider", return_value=provider), patch(
+            "app.tools.registry.web_search", return_value={"query": "test", "results": []}
+        ), patch("app.agents.orchestrator.resolve_model") as model:
+            model.return_value.supports_tools = True
+            events = list(run_agent(self.request("Research and compare current web sources", web_search=True)))
+
+        plans = [data["steps"] for event, data in events if event == "agent_plan"]
+        changed = next(plan for plan in plans if any(item["title"] == "Verify official source" for item in plan))
+        self.assertEqual(
+            [(item["title"], item["status"]) for item in changed],
+            [
+                ("Search broadly", "completed"),
+                ("Analyze weak lead", "skipped"),
+                ("Verify official source", "pending"),
+                ("Draft answer", "pending"),
+            ],
+        )
+        final_plan = plans[-1]
+        self.assertEqual(next(item["status"] for item in final_plan if item["title"] == "Verify official source"), "completed")
+        self.assertEqual(next(item["status"] for item in final_plan if item["title"] == "Draft answer"), "skipped")
+
     def test_workspace_tool_switch_prevents_registration(self) -> None:
         provider = Provider(response('{"steps":["Search"]}'), response("Cannot search"))
         with patch("app.agents.orchestrator.create_llm_provider", return_value=provider):
