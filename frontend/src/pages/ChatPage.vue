@@ -284,7 +284,6 @@ async function onUpload(files: File[]) {
 
     <div data-composer-dock class="z-10 shrink-0 bg-gradient-to-t from-[#0b0d10] via-[#0b0d10] to-transparent px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-7 sm:px-6 sm:pb-6 sm:pt-9">
       <div class="mx-auto w-full max-w-[880px]">
-        <DocumentAssociationZone :model-value="associatedDocumentIds" :workspace-id="workspaces.currentId.value" @update:model-value="setAssociatedDocuments" />
         <input ref="fileInputRef" type="file" multiple accept=".txt,.md,.markdown,.pdf,.docx,.csv,.xlsx" class="hidden" @change="onFilePick" />
         <MessageComposer ref="composerRef" :disabled="!chat.canSend.value" :streaming="chat.isLoading.value" @send="onSend" @stop="chat.stop">
           <template #attachments>
@@ -299,6 +298,9 @@ async function onUpload(files: File[]) {
           </template>
           <template #actions>
             <span v-if="isUploading" class="hidden sm:inline">Uploading...</span>
+          </template>
+          <template #center>
+            <DocumentAssociationZone :model-value="associatedDocumentIds" :workspace-id="workspaces.currentId.value" :uploading="isUploading" :agent-run="chat.agentRun.value" @update:model-value="setAssociatedDocuments" @request-upload="triggerFilePicker" />
           </template>
           <template #before-send>
             <Popover :open="controlsOpen" @update:open="(v: boolean) => (controlsOpen = v)">
