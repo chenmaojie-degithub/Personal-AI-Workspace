@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 import { FileText, Paperclip, Trash2 } from 'lucide-vue-next'
 import { useChat } from '@/lib/chat'
 import { useWorkspaces } from '@/lib/workspaces'
+import DocumentDropZone from '@/components/files/DocumentDropZone.vue'
 
 type KnowledgeFile = { filename: string; session_id: string | null; bytes: number; status: string; chunk_count: number; ingest_error: string | null }
 const chat = useChat()
@@ -32,12 +33,9 @@ async function load() {
   }
 }
 
-async function upload(event: Event) {
-  const element = event.target as HTMLInputElement
-  const selected = Array.from(element.files ?? [])
-  element.value = ''
+async function uploadSelected(selected: File[]) {
   const id = workspaces.currentId.value
-  if (!selected.length || !id) return
+  if (!selected.length || !id || uploading.value) return
   uploading.value = true
   error.value = null
   try {
@@ -55,6 +53,13 @@ async function upload(event: Event) {
   } finally {
     uploading.value = false
   }
+}
+
+function upload(event: Event) {
+  const element = event.target as HTMLInputElement
+  const selected = Array.from(element.files ?? [])
+  element.value = ''
+  void uploadSelected(selected)
 }
 
 async function remove(file: KnowledgeFile) {
@@ -75,6 +80,7 @@ watch(workspaces.currentId, () => { files.value = []; void load() }, { immediate
 </script>
 
 <template>
+  <DocumentDropZone class="h-full" :disabled="uploading" @files="uploadSelected" @invalid="(message: string) => (error = message)">
   <div class="h-full overflow-y-auto bg-[#0b0d10] px-4 py-8 text-white sm:px-8">
     <div class="mx-auto max-w-[850px]">
       <div class="flex items-center justify-between gap-4">
@@ -96,4 +102,5 @@ watch(workspaces.currentId, () => { files.value = []; void load() }, { immediate
       </div>
     </div>
   </div>
+  </DocumentDropZone>
 </template>

@@ -7,6 +7,7 @@ import MessageComposer from '@/components/chat/MessageComposer.vue'
 import AttachmentChips from '@/components/chat/AttachmentChips.vue'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
 import CapabilitiesCard from '@/components/settings/CapabilitiesCard.vue'
+import DocumentDropZone from '@/components/files/DocumentDropZone.vue'
 import { useChat } from '@/lib/chat'
 import type { UiAttachment } from '@/lib/chat'
 import { useWorkspaces } from '@/lib/workspaces'
@@ -243,6 +244,7 @@ async function onUpload(files: File[]) {
 </script>
 
 <template>
+  <DocumentDropZone class="h-full min-h-0" :disabled="isUploading" @files="onUpload" @invalid="(text: string) => setUploadStatus({ kind: 'error', text })">
   <div data-chat-page class="flex h-full min-h-0 flex-col bg-[#0b0d10]">
     <div ref="scrollAreaRef" data-messages-viewport class="min-h-0 flex-1 overflow-y-auto px-4 pt-5 sm:px-6 sm:pt-7" @scroll="onMessagesScroll">
       <div v-if="!hasMessages" class="flex min-h-full items-center justify-center pb-12">
@@ -309,6 +311,7 @@ async function onUpload(files: File[]) {
       </div>
     </div>
   </div>
+  </DocumentDropZone>
 </template>
 
 <style scoped>
