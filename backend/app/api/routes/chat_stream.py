@@ -16,6 +16,7 @@ from app.api.routes.chat import (
     relevant_tool_specs,
     resolve_workspace_request,
 )
+from app.agents.orchestrator import run_agent, should_run_agent
 from app.core.config import settings
 from app.core.database import save_chat_turn
 from app.models.chat import ChartArtifact, ChatRequest, CitationSource, ToolCallLog
@@ -192,10 +193,18 @@ def _events(req: ChatRequest) -> Iterator[str]:
         yield _sse("error", {"message": f"Streaming failed: {type(exc).__name__}: {exc}"})
 
 
+def _routed_events(req: ChatRequest) -> Iterator[str]:
+    if should_run_agent(req):
+        for event, data in run_agent(req):
+            yield _sse(event, data)
+        return
+    yield from _events(req)
+
+
 @router.post("/chat/stream")
 def chat_stream(req: ChatRequest) -> StreamingResponse:
     return StreamingResponse(
-        _events(req),
+        _routed_events(req),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
