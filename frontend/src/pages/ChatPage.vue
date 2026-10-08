@@ -9,6 +9,7 @@ import AgentRunPanel from '@/components/chat/AgentRunPanel.vue'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
 import CapabilitiesCard from '@/components/settings/CapabilitiesCard.vue'
 import DocumentDropZone from '@/components/files/DocumentDropZone.vue'
+import DocumentAssociationZone from '@/components/files/DocumentAssociationZone.vue'
 import { useChat } from '@/lib/chat'
 import type { UiAttachment } from '@/lib/chat'
 import { useWorkspaces } from '@/lib/workspaces'
@@ -63,6 +64,7 @@ const autoScrollArmed = ref(false)
 const uploadStatus = ref<{ kind: 'success' | 'warning' | 'error'; text: string } | null>(null)
 let uploadStatusTimer: number | null = null
 const composerAttachments = ref<UiAttachment[]>([])
+const associatedDocumentIds = ref<string[]>([])
 
 function setUploadStatus(next: { kind: 'success' | 'warning' | 'error'; text: string } | null) {
   uploadStatus.value = next
@@ -92,13 +94,14 @@ function onSend(text: string) {
   // Snapshot current attachments onto this outgoing user message.
   const attachments = composerAttachments.value.length ? composerAttachments.value.map((a) => ({ ...a })) : undefined
   composerAttachments.value = []
-  void chat.send(text, { attachments })
+  void chat.send(text, { attachments, documentIds: associatedDocumentIds.value })
   void nextTick(() => scrollToLastMessage('auto'))
 }
 
 watch(() => chat.sessionId.value, () => {
   composerRef.value?.setText('')
   composerAttachments.value = []
+  associatedDocumentIds.value = []
   setUploadStatus(null)
   autoScrollArmed.value = true
 })
@@ -196,6 +199,7 @@ async function onUpload(files: File[]) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const s of (data.stored ?? []) as any[]) {
       if (s?.filename) byName.set(String(s.filename), { bytes: s?.bytes, contentType: s?.content_type })
+      if (typeof s?.document_id === 'string' && !associatedDocumentIds.value.includes(s.document_id)) associatedDocumentIds.value.push(s.document_id)
     }
 
     composerAttachments.value = composerAttachments.value.map((a) => {
@@ -279,6 +283,7 @@ async function onUpload(files: File[]) {
 
     <div data-composer-dock class="z-10 shrink-0 bg-gradient-to-t from-[#0b0d10] via-[#0b0d10] to-transparent px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-7 sm:px-6 sm:pb-6 sm:pt-9">
       <div class="mx-auto w-full max-w-[880px]">
+        <DocumentAssociationZone v-model="associatedDocumentIds" :workspace-id="workspaces.currentId.value" />
         <input ref="fileInputRef" type="file" multiple accept=".txt,.md,.markdown,.pdf,.docx,.csv,.xlsx" class="hidden" @change="onFilePick" />
         <MessageComposer ref="composerRef" :disabled="!chat.canSend.value" :streaming="chat.isLoading.value" @send="onSend" @stop="chat.stop">
           <template #attachments>
