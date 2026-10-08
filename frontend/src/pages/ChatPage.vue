@@ -65,6 +65,7 @@ const uploadStatus = ref<{ kind: 'success' | 'warning' | 'error'; text: string }
 let uploadStatusTimer: number | null = null
 const composerAttachments = ref<UiAttachment[]>([])
 const associatedDocumentIds = ref<string[]>([])
+function setAssociatedDocuments(ids: string[]) { associatedDocumentIds.value = ids }
 
 function setUploadStatus(next: { kind: 'success' | 'warning' | 'error'; text: string } | null) {
   uploadStatus.value = next
@@ -283,7 +284,7 @@ async function onUpload(files: File[]) {
 
     <div data-composer-dock class="z-10 shrink-0 bg-gradient-to-t from-[#0b0d10] via-[#0b0d10] to-transparent px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-7 sm:px-6 sm:pb-6 sm:pt-9">
       <div class="mx-auto w-full max-w-[880px]">
-        <DocumentAssociationZone v-model="associatedDocumentIds" :workspace-id="workspaces.currentId.value" />
+        <DocumentAssociationZone :model-value="associatedDocumentIds" :workspace-id="workspaces.currentId.value" @update:model-value="setAssociatedDocuments" />
         <input ref="fileInputRef" type="file" multiple accept=".txt,.md,.markdown,.pdf,.docx,.csv,.xlsx" class="hidden" @change="onFilePick" />
         <MessageComposer ref="composerRef" :disabled="!chat.canSend.value" :streaming="chat.isLoading.value" @send="onSend" @stop="chat.stop">
           <template #attachments>
