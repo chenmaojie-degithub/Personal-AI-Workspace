@@ -47,6 +47,7 @@ class AgentOrchestratorTests(unittest.TestCase):
         )
 
     def test_simple_question_stays_on_direct_chat_path(self) -> None:
+        self.assertEqual(database.settings.agent_max_tool_steps, 4)
         self.assertFalse(should_run_agent(self.request("What is Docker?")))
         self.assertTrue(should_run_agent(self.request("Research and compare the latest web news")))
 

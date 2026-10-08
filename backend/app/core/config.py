@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     chroma_collection: str = "rag_chunks"
 
     # Agent execution budgets. Agent orchestration reads these values centrally.
-    agent_max_tool_steps: int = 6
+    agent_max_tool_steps: int = 4
     agent_max_model_calls: int = 8
     agent_timeout_seconds: int = 120
     agent_token_budget: int = 16_000
