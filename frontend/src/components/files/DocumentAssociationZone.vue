@@ -70,8 +70,8 @@ async function expand() {
   if (!element || !origin || !destination || reducedMotion()) { if (id === transitionId) viewState.value = 'expanded'; return }
   const offsetY = origin.bottom - destination.bottom
   layoutAnimation = element.animate([
-    { transform: `translateX(-50%) translateY(${offsetY}px) scale(${origin.width / destination.width}, ${origin.height / destination.height})`, transformOrigin: 'bottom center', borderRadius: '999px', opacity: .88 },
-    { transform: 'translateX(-50%) translateY(0) scale(1)', transformOrigin: 'bottom center', borderRadius: '18px', opacity: 1 },
+    { transform: `translateY(${offsetY}px) scale(${origin.width / destination.width}, ${origin.height / destination.height})`, transformOrigin: 'bottom center', borderRadius: '999px', opacity: .88 },
+    { transform: 'translateY(0) scale(1)', transformOrigin: 'bottom center', borderRadius: '18px', opacity: 1 },
   ], { duration: 480, easing: 'cubic-bezier(.22,1,.36,1)', composite: 'replace' })
   try { await layoutAnimation.finished } catch { return }
   if (id === transitionId) { layoutAnimation = null; viewState.value = 'expanded' }
@@ -95,8 +95,8 @@ async function collapse() {
   if (!element || !from || !destination || reducedMotion()) { if (id === transitionId) viewState.value = 'collapsed'; return }
   const offsetY = destination.bottom - from.bottom
   layoutAnimation = element.animate([
-    { transform: 'translateX(-50%) translateY(0) scale(1)', transformOrigin: 'bottom center', borderRadius: '18px', opacity: 1 },
-    { transform: `translateX(-50%) translateY(${offsetY}px) scale(${destination.width / from.width}, ${destination.height / from.height})`, transformOrigin: 'bottom center', borderRadius: '999px', opacity: .88 },
+    { transform: 'translateY(0) scale(1)', transformOrigin: 'bottom center', borderRadius: '18px', opacity: 1 },
+    { transform: `translateY(${offsetY}px) scale(${destination.width / from.width}, ${destination.height / from.height})`, transformOrigin: 'bottom center', borderRadius: '999px', opacity: .88 },
   ], { duration: 420, easing: 'cubic-bezier(.4,0,.2,1)', composite: 'replace' })
   try { await layoutAnimation.finished } catch { return }
   if (id === transitionId) { layoutAnimation = null; viewState.value = 'collapsed' }
