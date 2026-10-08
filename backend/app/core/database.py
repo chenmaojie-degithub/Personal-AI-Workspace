@@ -102,6 +102,32 @@ CREATE TABLE IF NOT EXISTS agent_steps (
 
 CREATE INDEX IF NOT EXISTS idx_agent_steps_run
 ON agent_steps (run_id, step_index);
+
+CREATE TABLE IF NOT EXISTS documents (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT REFERENCES workspaces(id),
+    session_id TEXT,
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    extension TEXT NOT NULL,
+    byte_size INTEGER NOT NULL CHECK (byte_size >= 0),
+    content_sha256 TEXT NOT NULL,
+    status TEXT NOT NULL,
+    chunk_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_workspace_name
+ON documents (workspace_id, filename) WHERE workspace_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_session_name
+ON documents (session_id, filename) WHERE workspace_id IS NULL AND session_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_documents_workspace_hash
+ON documents (workspace_id, content_sha256);
 """
 
 
@@ -311,6 +337,7 @@ def delete_session(session_id: str) -> dict[str, int]:
     """Delete only this session's business records in one transaction."""
     with _connection() as (connection, placeholder):
         with closing(connection.cursor()) as cursor:
+            cursor.execute(f"DELETE FROM documents WHERE workspace_id IS NULL AND session_id = {placeholder}", (session_id,))
             cursor.execute(f"DELETE FROM agent_steps WHERE run_id IN (SELECT id FROM agent_runs WHERE session_id = {placeholder})", (session_id,))
             cursor.execute(f"DELETE FROM agent_runs WHERE session_id = {placeholder}", (session_id,))
             cursor.execute(f"DELETE FROM token_usage WHERE session_id = {placeholder}", (session_id,))
@@ -516,12 +543,114 @@ def latest_agent_run(session_id: str, workspace_id: str) -> dict | None:
     return get_agent_run(row["id"], workspace_id) if row else None
 
 
+def create_document_record(
+    *,
+    filename: str,
+    content_type: str,
+    byte_size: int,
+    content_sha256: str,
+    workspace_id: str | None = None,
+    session_id: str | None = None,
+    document_id: str | None = None,
+) -> dict:
+    if not workspace_id and not session_id:
+        raise ValueError("workspace_id or session_id is required")
+    if workspace_id and not get_workspace(workspace_id):
+        raise ValueError("Workspace not found")
+    identifier = document_id or str(uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    with _connection() as (connection, placeholder):
+        connection.execute(
+            f"INSERT INTO documents (id, workspace_id, session_id, filename, content_type, extension, byte_size, content_sha256, status, created_at, updated_at) VALUES ({', '.join([placeholder] * 11)})",
+            (
+                identifier, workspace_id, session_id, filename, content_type,
+                Path(filename).suffix.lower(), byte_size, content_sha256,
+                "uploaded", now, now,
+            ),
+        )
+    return get_document_record(identifier) or {}
+
+
+def update_document_record(
+    document_id: str,
+    *,
+    status: str | None = None,
+    chunk_count: int | None = None,
+    error: str | None = None,
+) -> None:
+    values: dict[str, object] = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    if status is not None:
+        values["status"] = status
+    if chunk_count is not None:
+        values["chunk_count"] = chunk_count
+    if error is not None:
+        values["error"] = error[:2000]
+    elif status in {"indexed", "ready"}:
+        values["error"] = None
+    with _connection() as (connection, placeholder):
+        assignments = ", ".join(f"{name} = {placeholder}" for name in values)
+        cursor = connection.execute(
+            f"UPDATE documents SET {assignments} WHERE id = {placeholder}",
+            (*values.values(), document_id),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("Document not found")
+
+
+def get_document_record(document_id: str, workspace_id: str | None = None) -> dict | None:
+    with _connection() as (connection, placeholder):
+        workspace_filter = f" AND workspace_id = {placeholder}" if workspace_id else ""
+        parameters = (document_id, workspace_id) if workspace_id else (document_id,)
+        row = connection.execute(
+            f"SELECT *, CAST(created_at AS TEXT) AS created_at_text, CAST(updated_at AS TEXT) AS updated_at_text FROM documents WHERE id = {placeholder}{workspace_filter}",
+            parameters,
+        ).fetchone()
+    if not row:
+        return None
+    result = dict(row)
+    result["created_at"] = result.pop("created_at_text")
+    result["updated_at"] = result.pop("updated_at_text")
+    return result
+
+
+def list_document_records(*, workspace_id: str | None = None, session_id: str | None = None) -> list[dict]:
+    if not workspace_id and not session_id:
+        raise ValueError("workspace_id or session_id is required")
+    with _connection() as (connection, placeholder):
+        if workspace_id:
+            rows = connection.execute(
+                f"SELECT id FROM documents WHERE workspace_id = {placeholder} ORDER BY created_at, id",
+                (workspace_id,),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                f"SELECT id FROM documents WHERE workspace_id IS NULL AND session_id = {placeholder} ORDER BY created_at, id",
+                (session_id,),
+            ).fetchall()
+    return [record for row in rows if (record := get_document_record(row["id"]))]
+
+
+def find_document_by_name(filename: str, *, workspace_id: str | None = None, session_id: str | None = None) -> dict | None:
+    return next((item for item in list_document_records(workspace_id=workspace_id, session_id=session_id) if item["filename"] == filename), None)
+
+
+def find_document_by_hash(content_sha256: str, *, workspace_id: str | None = None, session_id: str | None = None) -> dict | None:
+    return next((item for item in list_document_records(workspace_id=workspace_id, session_id=session_id) if item["content_sha256"] == content_sha256), None)
+
+
+def delete_document_record(document_id: str) -> bool:
+    with _connection() as (connection, placeholder):
+        cursor = connection.execute(f"DELETE FROM documents WHERE id = {placeholder}", (document_id,))
+    return cursor.rowcount == 1
+
+
 def delete_workspace_business(workspace_id: str) -> dict[str, int]:
     """Delete business rows in one transaction after external data has been staged."""
     if workspace_id == DEFAULT_WORKSPACE_ID:
         raise ValueError("Default Workspace cannot be deleted")
     with _connection() as (connection, placeholder):
         with closing(connection.cursor()) as cursor:
+            cursor.execute(f"DELETE FROM documents WHERE workspace_id = {placeholder}", (workspace_id,))
             cursor.execute(f"DELETE FROM agent_steps WHERE run_id IN (SELECT id FROM agent_runs WHERE workspace_id = {placeholder})", (workspace_id,))
             cursor.execute(f"DELETE FROM agent_runs WHERE workspace_id = {placeholder}", (workspace_id,))
             cursor.execute(f"DELETE FROM token_usage WHERE session_id IN (SELECT session_id FROM chat_sessions WHERE workspace_id = {placeholder})", (workspace_id,))
