@@ -36,7 +36,7 @@ def load_pdf_file(file_path: Path) -> str:
     Load PDF file and extract text content.
     """
     if PdfReader is None:
-        return f"[PDF support not available: pypdf library not installed]"
+        raise RuntimeError("PDF support is unavailable because pypdf is not installed")
 
     try:
         reader = PdfReader(file_path)
@@ -47,7 +47,7 @@ def load_pdf_file(file_path: Path) -> str:
                 pages_text.append(_normalize_pdf_text(text))
         return "\n\n".join(pages_text)
     except Exception as e:
-        return f"[Error reading PDF {file_path.name}: {e}]"
+        raise RuntimeError(f"Error reading PDF {file_path.name}: {e}") from e
 
 
 def load_docx_file(file_path: Path) -> str:
@@ -55,7 +55,7 @@ def load_docx_file(file_path: Path) -> str:
     Load DOCX file and extract text content.
     """
     if Document is None:
-        return f"[DOCX support not available: python-docx library not installed]"
+        raise RuntimeError("DOCX support is unavailable because python-docx is not installed")
 
     try:
         doc = Document(file_path)
@@ -65,7 +65,7 @@ def load_docx_file(file_path: Path) -> str:
                 paragraphs.append(para.text)
         return "\n\n".join(paragraphs)
     except Exception as e:
-        return f"[Error reading DOCX {file_path.name}: {e}]"
+        raise RuntimeError(f"Error reading DOCX {file_path.name}: {e}") from e
 
 
 def _infer_content_type(file_path: Path) -> str:
@@ -115,14 +115,10 @@ def load_file(file_path: Path) -> dict[str, Any]:
     elif suffix == ".docx":
         content = load_docx_file(file_path)
     else:
-        # Fallback: try as text
-        try:
-            content = load_text_file(file_path)
-            # If successful, keep inferred content type or default to text/plain
-            if content_type == "application/octet-stream":
-                content_type = "text/plain"
-        except Exception:
-            content = f"[Unsupported file type: {suffix}. Supported formats: .txt, .md, .pdf, .docx]"
+        raise ValueError(f"Unsupported file type: {suffix}")
+
+    if not content.strip():
+        raise ValueError(f"No extractable text found in {file_path.name}")
 
     return {
         "content": content,
@@ -138,20 +134,8 @@ def load_files(file_paths: list[Path]) -> list[dict[str, Any]]:
     documents: list[dict[str, Any]] = []
 
     for fp in file_paths:
-        try:
-            doc = load_file(fp)
-            doc["document_id"] = str(fp)  # Use path as ID for now
-            documents.append(doc)
-        except Exception as e:
-            # Log error but continue
-            documents.append(
-                {
-                    "content": f"[Error loading {fp.name}: {e}]",
-                    "filename": fp.name,
-                    "content_type": "text/plain",
-                    "document_id": str(fp),
-                    "error": str(e),
-                }
-            )
+        doc = load_file(fp)
+        doc["document_id"] = str(fp)  # Legacy default; callers may replace with a stable id.
+        documents.append(doc)
 
     return documents

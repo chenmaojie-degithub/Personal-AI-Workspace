@@ -68,5 +68,10 @@ class Settings(BaseSettings):
     agent_tool_result_max_chars: int = 12_000
     agent_repeat_limit: int = 2
 
+    # Upload limits are enforced while streaming bytes to temporary files.
+    document_max_bytes: int = 25 * 1024 * 1024
+    data_file_max_bytes: int = 10 * 1024 * 1024
+    upload_max_files: int = 20
+
 
 settings = Settings()

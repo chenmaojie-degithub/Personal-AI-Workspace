@@ -94,7 +94,13 @@ class RAGService:
             metadata=dict(metadata),
         )
 
-    def ingest_files(self, session_id: str, file_paths: list[Path], workspace_id: str | None = None) -> dict[str, Any]:
+    def ingest_files(
+        self,
+        session_id: str,
+        file_paths: list[Path],
+        workspace_id: str | None = None,
+        document_metadata: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """
         Ingest files for a session: load, chunk, embed, store.
 
@@ -102,6 +108,11 @@ class RAGService:
         """
         # 1. Load files
         documents = load_files(file_paths)
+        for document in documents:
+            metadata = (document_metadata or {}).get(document["filename"], {})
+            if metadata.get("document_id"):
+                document["document_id"] = metadata["document_id"]
+            document["metadata"] = metadata
 
         # 2. Chunk documents
         chunks = chunk_documents(documents)
@@ -128,6 +139,9 @@ class RAGService:
                 # Optional fields (only include if present)
                 "start": c.get("start"),
                 "end": c.get("end"),
+                "content_type": c.get("metadata", {}).get("content_type"),
+                "content_sha256": c.get("metadata", {}).get("content_sha256"),
+                "schema_version": c.get("metadata", {}).get("schema_version", 1),
             }
             meta = {k: v for k, v in raw_meta.items() if v is not None}
             metadatas.append(meta)
@@ -227,13 +241,16 @@ class RAGService:
                 counts[filename] = counts.get(filename, 0) + 1
         return counts
 
-    def delete_file(self, session_id: str, filename: str, workspace_id: str | None = None) -> int:
+    def delete_file(self, session_id: str, filename: str, workspace_id: str | None = None, document_id: str | None = None) -> int:
         where = (
             {"$and": [
                 {"workspace_id": workspace_id},
-                {"document_id": str((Path(settings.storage_dir).resolve() / "workspaces" / workspace_id / filename).resolve())},
+                {"document_id": document_id or str((Path(settings.storage_dir).resolve() / "workspaces" / workspace_id / filename).resolve())},
             ]}
-            if workspace_id else self._where(session_id, filename)
+            if workspace_id else (
+                {"$and": [{"session_id": session_id}, {"document_id": document_id}]}
+                if document_id else self._where(session_id, filename)
+            )
         )
         existing = self.collection.get(where=where, include=[])
         count = len(existing.get("ids") or [])
