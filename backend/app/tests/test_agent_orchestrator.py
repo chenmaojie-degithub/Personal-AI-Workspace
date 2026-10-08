@@ -224,6 +224,22 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertTrue(any(event == "message" and data["content"] == "Explain failure" for event, data in events))
         self.assertFalse(any(event == "error" for event, _ in events))
 
+    def test_successful_search_limit_removes_tool_before_final_decision(self) -> None:
+        first = ProviderToolCall("call-1", "search_web", '{"query":"first"}')
+        second = ProviderToolCall("call-2", "search_web", '{"query":"second"}')
+        provider = Provider(
+            response('{"steps":["First search","Second search","Answer"]}'),
+            response("", (first,)), response("", (second,)), response("Final answer"),
+        )
+        with patch("app.agents.orchestrator.create_llm_provider", return_value=provider), patch(
+            "app.tools.registry.web_search", return_value={"query": "test", "results": []}
+        ), patch("app.agents.orchestrator.resolve_model") as model:
+            model.return_value.supports_tools = True
+            events = list(run_agent(self.request("Research and compare current web sources", web_search=True)))
+        self.assertEqual([event for event, _ in events].count("tool_call"), 2)
+        self.assertIsNone(provider.tools[3])
+        self.assertTrue(any(event == "message" and data["content"] == "Final answer" for event, data in events))
+
     def test_observation_can_replace_skip_and_add_public_plan_steps(self) -> None:
         first = ProviderToolCall("call-1", "search_web", '{"query":"broad"}')
         second = ProviderToolCall("call-2", "search_web", '{"query":"official"}')

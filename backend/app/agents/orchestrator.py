@@ -268,6 +268,7 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
             *({"role": item.role, "content": item.content} for item in req.messages),
         ]
         signatures: dict[str, int] = {}
+        successful_searches: dict[str, int] = {}
         step_index = 0
         stop_reason: str | None = None
 
@@ -386,6 +387,7 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                     for call in response.tool_calls
                 ],
             })
+            exhausted_tools: set[str] = set()
             for call in response.tool_calls:
                 _raise_if_cancelled(run_id)
                 if step_index >= settings.agent_max_tool_steps:
@@ -427,6 +429,14 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                     if call.name == "analyze_data" and isinstance(result, dict) and result.get("type") == "chart":
                         charts.append(ChartArtifact(url=result["url"], title=result["title"]))
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": tool_content})
+                    if call.name in {"search_web", "search_knowledge"}:
+                        successful_searches[call.name] = successful_searches.get(call.name, 0) + 1
+                        if successful_searches[call.name] >= 2:
+                            tools = [
+                                tool for tool in (tools or [])
+                                if tool["function"]["name"] != call.name
+                            ] or None
+                            exhausted_tools.add(call.name)
                     upsert_agent_step(
                         run_id, step_index, title, "completed", tool_name=call.name,
                         input_data=input_data, output_preview=tool_content,
@@ -458,6 +468,12 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                 if time.monotonic() - started >= settings.agent_timeout_seconds:
                     stop_reason = "timeout"
                     break
+
+            for name in sorted(exhausted_tools):
+                messages.append({
+                    "role": "system",
+                    "content": f"TOOL_LIMIT: {name} supplied enough evidence and is no longer available. Finalize or use another registered tool.",
+                })
 
             if stop_reason:
                 break
