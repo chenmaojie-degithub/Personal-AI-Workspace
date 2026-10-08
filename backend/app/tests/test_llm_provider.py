@@ -141,6 +141,18 @@ class DeepSeekProviderTests(unittest.TestCase):
         )
         self.assertEqual(openai.return_value.chat.completions.create.call_args.kwargs["max_tokens"], 321)
 
+    @patch("app.providers.deepseek.OpenAI")
+    def test_stream_limit_is_forwarded_to_provider(self, openai) -> None:
+        class FakeStream(list):
+            def close(self):
+                pass
+
+        openai.return_value.chat.completions.create.return_value = FakeStream([])
+        list(DeepSeekProvider("test-key", "https://example.com", "model").stream(
+            [{"role": "user", "content": "test"}], max_tokens=222,
+        ))
+        self.assertEqual(openai.return_value.chat.completions.create.call_args.kwargs["max_tokens"], 222)
+
 
 if __name__ == "__main__":
     unittest.main()

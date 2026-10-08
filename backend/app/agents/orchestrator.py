@@ -198,6 +198,7 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
     provider_name: str | None = None
     model_name: str | None = None
     content = ""
+    final_streamed = False
     sources: list[CitationSource] = []
     charts: list[ChartArtifact] = []
 
@@ -255,6 +256,7 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                     "When selecting another tool after an observation, put only a public plan update in the "
                     "assistant content as JSON: {\"plan_update\":{\"remaining_steps\":[\"next step\"]}}. "
                     "The list may retain, replace, remove, or add remaining steps; do not include reasoning. "
+                    "When no more tools are needed, respond only with FINAL_READY; the final answer is generated separately. "
                     "Do not reveal hidden reasoning."
                 ),
             },
@@ -305,11 +307,69 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                 yield "agent_plan", {"run_id": run_id, "goal": goal, "steps": [dict(item) for item in plan]}
 
             if not response.tool_calls:
-                content = response.content.strip()
-                stop_reason = response_limit
                 if _skip_pending_steps(plan):
                     update_agent_run(run_id, plan=plan, usage=usage if usage_complete else None)
                     yield "agent_plan", {"run_id": run_id, "goal": goal, "steps": [dict(item) for item in plan]}
+                stream_block_reason = response_limit
+                can_stream = (
+                    hasattr(provider, "stream")
+                    and response_limit is None
+                    and model_calls < settings.agent_max_model_calls
+                    and time.monotonic() - started < settings.agent_timeout_seconds
+                )
+                if can_stream:
+                    final_messages = [
+                        *messages,
+                        {"role": "assistant", "content": response.content.strip() or "FINAL_READY"},
+                        {
+                            "role": "system",
+                            "content": (
+                                "Provide the final answer now from the completed observations. Do not call tools. "
+                                "Do not mention FINAL_READY or hidden reasoning."
+                            ),
+                        },
+                    ]
+                    final_max_tokens = _completion_budget(final_messages, None, budget_tokens)
+                    can_stream = final_max_tokens > 0
+                    if not can_stream:
+                        stream_block_reason = "token_budget"
+                if can_stream:
+                    final_usage: LLMUsage | None = None
+                    final_parts: list[str] = []
+                    stream = provider.stream(final_messages, tools=None, max_tokens=final_max_tokens)
+                    model_calls += 1
+                    try:
+                        for event in stream:
+                            _raise_if_cancelled(run_id)
+                            if event.type == "message":
+                                final_parts.append(event.content)
+                                final_streamed = True
+                                yield "message", {"content": event.content}
+                            elif event.type == "usage":
+                                final_usage = event.usage
+                            elif event.type == "tool_call":
+                                raise RuntimeError("Final answer stream attempted an unexpected tool call")
+                            elif event.type == "done":
+                                provider_name, model_name = event.provider, event.model
+                    finally:
+                        close = getattr(stream, "close", None)
+                        if close:
+                            close()
+                    content = "".join(final_parts).strip()
+                    usage = _usage_sum(usage, final_usage) if usage_complete else None
+                    if final_usage is None:
+                        usage_complete = False
+                        usage = None
+                        budget_tokens += max(1, len(content) // 4)
+                    else:
+                        budget_tokens += final_usage.total_tokens
+                    if budget_tokens >= settings.agent_token_budget:
+                        stop_reason = "token_budget"
+                    elif time.monotonic() - started >= settings.agent_timeout_seconds:
+                        stop_reason = "timeout"
+                else:
+                    content = response.content.strip()
+                    stop_reason = stream_block_reason
                 break
             if response_limit:
                 stop_reason = response_limit
@@ -447,7 +507,8 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
             yield "source", source.model_dump()
         for chart in charts:
             yield "chart", chart.model_dump()
-        yield "message", {"content": content}
+        if not final_streamed:
+            yield "message", {"content": content}
         yield "usage", usage.__dict__ if usage_complete and usage else None
         save_chat_turn(
             session_id, goal, content, provider_name, model_name,

@@ -59,14 +59,18 @@ class DeepSeekProvider:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> Iterator[LLMStreamEvent]:
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=messages,
-            tools=tools,
-            stream=True,
-            stream_options={"include_usage": True},
-        )
+        request: dict[str, Any] = {
+            "model": self._model,
+            "messages": messages,
+            "tools": tools,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if max_tokens is not None:
+            request["max_tokens"] = max_tokens
+        response = self._client.chat.completions.create(**request)
         pending_tools: dict[int, dict[str, str]] = {}
         text_filter = TextToolCallFilter(tools)
         model = self._model

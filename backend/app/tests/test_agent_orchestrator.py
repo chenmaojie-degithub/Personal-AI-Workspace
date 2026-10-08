@@ -11,7 +11,7 @@ from app.api.routes.chat import orchestrate_request
 from app.api.routes.chat_stream import _routed_events
 from app.core import database
 from app.models.chat import ChatMessage, ChatRequest, ChatSettings
-from app.providers.base import LLMResponse, LLMUsage, ProviderToolCall
+from app.providers.base import LLMResponse, LLMStreamEvent, LLMUsage, ProviderToolCall
 
 
 def response(content: str, calls: tuple[ProviderToolCall, ...] = (), tokens: int = 10) -> LLMResponse:
@@ -28,6 +28,17 @@ class Provider:
         self.tools.append(tools)
         self.max_tokens.append(max_tokens)
         return self.responses.pop(0)
+
+
+class StreamingProvider(Provider):
+    def __init__(self, *responses: LLMResponse, stream_events: list[LLMStreamEvent]) -> None:
+        super().__init__(*responses)
+        self.stream_events = stream_events
+        self.stream_max_tokens: list[int | None] = []
+
+    def stream(self, messages, tools=None, max_tokens=None):
+        self.stream_max_tokens.append(max_tokens)
+        yield from self.stream_events
 
 
 class AgentOrchestratorTests(unittest.TestCase):
@@ -90,7 +101,8 @@ class AgentOrchestratorTests(unittest.TestCase):
             ("agent_run", {"run_id": "run-1", "session_id": "agent-session", "status": "planning"}),
             ("tool_call", {"name": "search_web", "input": {"query": "release"}}),
             ("source", {"type": "web", "title": "Release", "url": "https://example.com/release"}),
-            ("message", {"content": "Final answer"}),
+            ("message", {"content": "Final "}),
+            ("message", {"content": "answer"}),
             ("usage", {"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25}),
             ("agent_status", {"run_id": "run-1", "status": "completed", "reason": None}),
             ("done", {"session_id": "agent-session", "agent_run_id": "run-1"}),
@@ -104,6 +116,59 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertEqual(result.sources[0].type, "web")
         self.assertEqual(result.usage.total_tokens, 25)
         self.assertIsNone(result.error)
+
+    def test_final_answer_streams_and_is_saved_once_after_completion(self) -> None:
+        call = ProviderToolCall("call-1", "search_web", '{"query":"release"}')
+        provider = StreamingProvider(
+            response('{"steps":["Search","Answer"]}'),
+            response("", (call,)),
+            response("FINAL_READY"),
+            stream_events=[
+                LLMStreamEvent("message", content="Final "),
+                LLMStreamEvent("message", content="answer"),
+                LLMStreamEvent("usage", usage=LLMUsage(12, 3, 15)),
+                LLMStreamEvent("done", model="test-model", provider="test-provider"),
+            ],
+        )
+        with patch("app.agents.orchestrator.create_llm_provider", return_value=provider), patch(
+            "app.tools.registry.web_search",
+            return_value={"query": "release", "results": [{"title": "Real", "url": "https://example.com", "snippet": "Evidence"}]},
+        ), patch("app.agents.orchestrator.resolve_model") as model, patch(
+            "app.agents.orchestrator.save_chat_turn"
+        ) as save:
+            model.return_value.supports_tools = True
+            events = list(run_agent(self.request("Research and compare current web sources", web_search=True)))
+
+        self.assertEqual([data["content"] for event, data in events if event == "message"], ["Final ", "answer"])
+        self.assertEqual([data["type"] for event, data in events if event == "source"], ["web"])
+        self.assertEqual([data for event, data in events if event == "usage"][-1]["total_tokens"], 45)
+        self.assertTrue(provider.stream_max_tokens[0] > 0)
+        save.assert_called_once()
+        self.assertEqual(save.call_args.args[2], "Final answer")
+
+    def test_cancel_during_final_stream_does_not_save_partial_answer(self) -> None:
+        provider = StreamingProvider(
+            response('{"steps":["Answer"]}'), response("FINAL_READY"),
+            stream_events=[
+                LLMStreamEvent("message", content="Partial"),
+                LLMStreamEvent("message", content=" answer"),
+                LLMStreamEvent("done", model="test-model", provider="test-provider"),
+            ],
+        )
+        with patch("app.agents.orchestrator.create_llm_provider", return_value=provider), patch(
+            "app.agents.orchestrator.save_chat_turn"
+        ) as save:
+            iterator = run_agent(self.request("Research current web sources", web_search=True))
+            seen = []
+            for item in iterator:
+                seen.append(item)
+                if item[0] == "message":
+                    break
+            run_id = next(data["run_id"] for event, data in seen if event == "agent_run")
+            cancel_agent_run(run_id, database.DEFAULT_WORKSPACE_ID)
+            remaining = list(iterator)
+        self.assertTrue(any(event == "agent_status" and data["status"] == "cancelled" for event, data in remaining))
+        save.assert_not_called()
 
     def test_two_tools_observations_and_usage_are_persisted(self) -> None:
         search = ProviderToolCall("call-1", "search_web", '{"query":"release"}')
