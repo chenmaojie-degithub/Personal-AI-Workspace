@@ -12,6 +12,7 @@ def search_knowledge(
     query: str,
     document_id: str | None = None,
     top_k: int | None = None,
+    document_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Search only vectors owned by the current Workspace or legacy session."""
     chunks = get_rag_service().retrieve(
@@ -20,6 +21,7 @@ def search_knowledge(
         top_k=top_k or 5,
         workspace_id=workspace_id,
         document_id=document_id,
+        document_ids=document_ids,
     )
     return {
         "type": "knowledge_search",

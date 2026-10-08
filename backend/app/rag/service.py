@@ -82,6 +82,7 @@ class RAGService:
         filename: str | None = None,
         workspace_id: str | None = None,
         document_id: str | None = None,
+        document_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         scope = {"workspace_id": workspace_id} if workspace_id else {"session_id": session_id}
         filters = [scope]
@@ -89,6 +90,8 @@ class RAGService:
             filters.append({"filename": filename})
         if document_id:
             filters.append({"document_id": document_id})
+        elif document_ids:
+            filters.append({"document_id": {"$in": document_ids}})
         return filters[0] if len(filters) == 1 else {"$and": filters}
 
     @staticmethod
@@ -179,6 +182,7 @@ class RAGService:
         filename: str | None = None,
         workspace_id: str | None = None,
         document_id: str | None = None,
+        document_ids: list[str] | None = None,
     ) -> list[RAGChunk]:
         """
         Retrieve top-k relevant chunks for a query.
@@ -202,7 +206,7 @@ class RAGService:
         res = self.collection.query(
             query_embeddings=[q_emb],
             n_results=top_k,
-            where=self._where(session_id, filename, workspace_id, document_id),
+            where=self._where(session_id, filename, workspace_id, document_id, document_ids),
             include=["documents", "metadatas", "distances"],
         )
 

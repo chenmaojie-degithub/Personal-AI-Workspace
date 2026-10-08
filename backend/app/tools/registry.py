@@ -115,11 +115,13 @@ def get_agent_tool_specs(
     allowed_documents = set(document_ids) if document_ids else None
 
     def ensure_allowed(document_id: str | None) -> None:
-        if allowed_documents is not None and document_id not in allowed_documents:
+        if allowed_documents is not None and document_id is not None and document_id not in allowed_documents:
             raise ValueError("document_id must be one of the documents associated with this task")
 
     def scoped_search(**arguments: Any) -> Any:
         ensure_allowed(arguments.get("document_id"))
+        if allowed_documents is not None and arguments.get("document_id") is None:
+            arguments["document_ids"] = sorted(allowed_documents)
         return search_knowledge(session_id, workspace_id, **arguments)
 
     def scoped_read(**arguments: Any) -> Any:
