@@ -60,5 +60,13 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = "./chroma"
     chroma_collection: str = "rag_chunks"
 
+    # Agent execution budgets. Agent orchestration reads these values centrally.
+    agent_max_tool_steps: int = 6
+    agent_max_model_calls: int = 8
+    agent_timeout_seconds: int = 120
+    agent_token_budget: int = 16_000
+    agent_tool_result_max_chars: int = 12_000
+    agent_repeat_limit: int = 2
+
 
 settings = Settings()

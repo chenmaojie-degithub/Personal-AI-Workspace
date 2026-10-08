@@ -63,6 +63,45 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_workspace
 ON chat_sessions (workspace_id, updated_at);
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    goal TEXT NOT NULL,
+    plan_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL,
+    provider TEXT,
+    model TEXT,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_session
+ON agent_runs (session_id, created_at);
+
+CREATE TABLE IF NOT EXISTS agent_steps (
+    id {id_type},
+    run_id TEXT NOT NULL REFERENCES agent_runs(id),
+    step_index INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    tool_name TEXT,
+    status TEXT NOT NULL,
+    input_json TEXT,
+    output_preview TEXT,
+    error TEXT,
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    UNIQUE (run_id, step_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_steps_run
+ON agent_steps (run_id, step_index);
 """
 
 
@@ -272,6 +311,8 @@ def delete_session(session_id: str) -> dict[str, int]:
     """Delete only this session's business records in one transaction."""
     with _connection() as (connection, placeholder):
         with closing(connection.cursor()) as cursor:
+            cursor.execute(f"DELETE FROM agent_steps WHERE run_id IN (SELECT id FROM agent_runs WHERE session_id = {placeholder})", (session_id,))
+            cursor.execute(f"DELETE FROM agent_runs WHERE session_id = {placeholder}", (session_id,))
             cursor.execute(f"DELETE FROM token_usage WHERE session_id = {placeholder}", (session_id,))
             deleted_usage = cursor.rowcount
             cursor.execute(f"DELETE FROM chat_messages WHERE session_id = {placeholder}", (session_id,))
@@ -350,12 +391,139 @@ def session_workspace_id(session_id: str) -> str | None:
     return row["workspace_id"] if row else None
 
 
+def create_agent_run(run_id: str, session_id: str, workspace_id: str, goal: str) -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    with _connection() as (connection, placeholder):
+        if not connection.execute(f"SELECT 1 FROM workspaces WHERE id = {placeholder}", (workspace_id,)).fetchone():
+            raise ValueError("Workspace not found")
+        connection.execute(
+            f"INSERT INTO agent_runs (id, session_id, workspace_id, goal, plan_json, status, created_at, updated_at) VALUES ({', '.join([placeholder] * 8)})",
+            (run_id, session_id, workspace_id, goal, "[]", "planning", now, now),
+        )
+    return get_agent_run(run_id, workspace_id) or {}
+
+
+def update_agent_run(
+    run_id: str,
+    *,
+    status: str | None = None,
+    plan: list[dict] | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    usage: LLMUsage | None = None,
+    error: str | None = None,
+    completed: bool = False,
+) -> None:
+    values: dict[str, object] = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    if status is not None:
+        values["status"] = status
+    if plan is not None:
+        values["plan_json"] = json.dumps(plan, ensure_ascii=False)
+    if provider is not None:
+        values["provider"] = provider
+    if model is not None:
+        values["model"] = model
+    if usage is not None:
+        values.update({
+            "prompt_tokens": usage.prompt_tokens,
+            "completion_tokens": usage.completion_tokens,
+            "total_tokens": usage.total_tokens,
+        })
+    if error is not None:
+        values["error"] = error[:2000]
+    if completed:
+        values["completed_at"] = values["updated_at"]
+    with _connection() as (connection, placeholder):
+        assignments = ", ".join(f"{name} = {placeholder}" for name in values)
+        cursor = connection.execute(
+            f"UPDATE agent_runs SET {assignments} WHERE id = {placeholder}",
+            (*values.values(), run_id),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("Agent run not found")
+
+
+def upsert_agent_step(
+    run_id: str,
+    step_index: int,
+    title: str,
+    status: str,
+    *,
+    tool_name: str | None = None,
+    input_data: dict | None = None,
+    output_preview: str | None = None,
+    error: str | None = None,
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    terminal = status in {"completed", "failed", "cancelled", "skipped"}
+    with _connection() as (connection, placeholder):
+        existing = connection.execute(
+            f"SELECT id, started_at FROM agent_steps WHERE run_id = {placeholder} AND step_index = {placeholder}",
+            (run_id, step_index),
+        ).fetchone()
+        values = (
+            title[:300], tool_name, status,
+            json.dumps(input_data, ensure_ascii=False) if input_data is not None else None,
+            output_preview[:4000] if output_preview is not None else None,
+            error[:2000] if error is not None else None,
+            now if terminal else None,
+        )
+        if existing:
+            connection.execute(
+                f"UPDATE agent_steps SET title = {placeholder}, tool_name = {placeholder}, status = {placeholder}, input_json = {placeholder}, output_preview = {placeholder}, error = {placeholder}, completed_at = {placeholder} WHERE id = {placeholder}",
+                (*values, existing["id"]),
+            )
+        else:
+            connection.execute(
+                f"INSERT INTO agent_steps (run_id, step_index, title, tool_name, status, input_json, output_preview, error, started_at, completed_at) VALUES ({', '.join([placeholder] * 10)})",
+                (run_id, step_index, *values[:6], now, values[6]),
+            )
+
+
+def get_agent_run(run_id: str, workspace_id: str | None = None) -> dict | None:
+    with _connection() as (connection, placeholder):
+        workspace_filter = f" AND workspace_id = {placeholder}" if workspace_id else ""
+        parameters = (run_id, workspace_id) if workspace_id else (run_id,)
+        row = connection.execute(
+            f"SELECT *, CAST(created_at AS TEXT) AS created_at_text, CAST(updated_at AS TEXT) AS updated_at_text, CAST(completed_at AS TEXT) AS completed_at_text FROM agent_runs WHERE id = {placeholder}{workspace_filter}",
+            parameters,
+        ).fetchone()
+        if not row:
+            return None
+        steps = connection.execute(
+            f"SELECT step_index, title, tool_name, status, input_json, output_preview, error, CAST(started_at AS TEXT) AS started_at, CAST(completed_at AS TEXT) AS completed_at FROM agent_steps WHERE run_id = {placeholder} ORDER BY step_index",
+            (run_id,),
+        ).fetchall()
+    result = dict(row)
+    result["plan"] = json.loads(result.pop("plan_json"))
+    result["created_at"] = result.pop("created_at_text")
+    result["updated_at"] = result.pop("updated_at_text")
+    result["completed_at"] = result.pop("completed_at_text")
+    result["steps"] = []
+    for step in steps:
+        item = dict(step)
+        item["input"] = json.loads(item.pop("input_json")) if item["input_json"] else None
+        result["steps"].append(item)
+    return result
+
+
+def latest_agent_run(session_id: str, workspace_id: str) -> dict | None:
+    with _connection() as (connection, placeholder):
+        row = connection.execute(
+            f"SELECT id FROM agent_runs WHERE session_id = {placeholder} AND workspace_id = {placeholder} ORDER BY created_at DESC LIMIT 1",
+            (session_id, workspace_id),
+        ).fetchone()
+    return get_agent_run(row["id"], workspace_id) if row else None
+
+
 def delete_workspace_business(workspace_id: str) -> dict[str, int]:
     """Delete business rows in one transaction after external data has been staged."""
     if workspace_id == DEFAULT_WORKSPACE_ID:
         raise ValueError("Default Workspace cannot be deleted")
     with _connection() as (connection, placeholder):
         with closing(connection.cursor()) as cursor:
+            cursor.execute(f"DELETE FROM agent_steps WHERE run_id IN (SELECT id FROM agent_runs WHERE workspace_id = {placeholder})", (workspace_id,))
+            cursor.execute(f"DELETE FROM agent_runs WHERE workspace_id = {placeholder}", (workspace_id,))
             cursor.execute(f"DELETE FROM token_usage WHERE session_id IN (SELECT session_id FROM chat_sessions WHERE workspace_id = {placeholder})", (workspace_id,))
             usage = cursor.rowcount
             cursor.execute(f"DELETE FROM chat_messages WHERE session_id IN (SELECT session_id FROM chat_sessions WHERE workspace_id = {placeholder})", (workspace_id,))
