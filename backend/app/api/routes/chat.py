@@ -29,6 +29,7 @@ from app.core.config import settings
 from app.core.database import DEFAULT_WORKSPACE_ID, get_document_record, get_workspace, save_chat_turn, session_workspace_id
 from app.models.chat import ChartArtifact, ChatSettings, CitationSource, ChatMessage, ChatRequest, ChatResponse, ToolCallLog
 from app.providers.factory import create_llm_provider
+from app.providers.base import LLMUsage
 from app.providers.registry import resolve_model
 from app.rag.service import get_rag_service
 from app.services.data_analysis import list_analysis_files
@@ -594,11 +595,58 @@ def orchestrate_chat(req: ChatRequest) -> ChatResponse:
 # region 7. FastAPI /chat 入口
 
 
+def orchestrate_request(req: ChatRequest) -> ChatResponse:
+    """Route complex goals through the shared Agent engine and adapt its events."""
+    # Local import avoids a module cycle: the Agent reuses helpers from this module.
+    from app.agents.orchestrator import run_agent, should_run_agent
+
+    if not should_run_agent(req):
+        return orchestrate_chat(req)
+
+    session_id = req.session_id or ""
+    content_parts: list[str] = []
+    tool_calls: list[ToolCallLog] = []
+    sources: list[CitationSource] = []
+    charts: list[ChartArtifact] = []
+    usage: LLMUsage | None = None
+    error: str | None = None
+
+    for event, data in run_agent(req):
+        payload = data if isinstance(data, dict) else {}
+        if event in {"agent_run", "done"}:
+            session_id = str(payload.get("session_id") or session_id)
+        elif event == "message":
+            content_parts.append(str(payload.get("content") or ""))
+        elif event == "tool_call":
+            tool_calls.append(ToolCallLog.model_validate(payload))
+        elif event == "source":
+            sources.append(CitationSource.model_validate(payload))
+        elif event == "chart":
+            charts.append(ChartArtifact.model_validate(payload))
+        elif event == "usage" and payload:
+            usage = LLMUsage(**payload)
+        elif event == "error":
+            error = str(payload.get("message") or "Agent failed")
+        elif event == "agent_status" and payload.get("status") in {"failed", "cancelled"}:
+            error = str(payload.get("reason") or payload["status"])
+
+    content = "".join(content_parts).strip()
+    return ChatResponse(
+        session_id=session_id,
+        assistant_message=ChatMessage(role="assistant", content=content) if content else None,
+        tool_calls=tool_calls,
+        sources=sources,
+        charts=charts,
+        usage=usage,
+        error=error,
+    )
+
+
 # POST /chat 的 HTTP 入口。
 # FastAPI 会先把 JSON 请求校验并转换为 ChatRequest，再将 ChatResponse 序列化为 JSON。
 # 当前函数是同步 def，FastAPI 会在工作线程中执行，避免阻塞主事件循环。
 @router.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest) -> ChatResponse:
-    return orchestrate_chat(req)
+    return orchestrate_request(req)
 
 # endregion

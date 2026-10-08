@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.agents.orchestrator import cancel_agent_run, run_agent, should_run_agent
+from app.api.routes.chat import orchestrate_request
 from app.api.routes.chat_stream import _routed_events
 from app.core import database
 from app.models.chat import ChatMessage, ChatRequest, ChatSettings
@@ -59,6 +60,36 @@ class AgentOrchestratorTests(unittest.TestCase):
         ])):
             output = list(_routed_events(self.request("Research and compare sources")))
         self.assertIn("event: agent_status", output[0])
+
+    def test_simple_non_streaming_request_keeps_direct_path(self) -> None:
+        expected = object()
+        with patch("app.api.routes.chat.orchestrate_chat", return_value=expected) as direct, patch(
+            "app.agents.orchestrator.run_agent"
+        ) as agent:
+            result = orchestrate_request(self.request("What is Docker?"))
+        self.assertIs(result, expected)
+        direct.assert_called_once()
+        agent.assert_not_called()
+
+    def test_complex_non_streaming_request_uses_agent_and_adapts_events(self) -> None:
+        events = iter([
+            ("agent_run", {"run_id": "run-1", "session_id": "agent-session", "status": "planning"}),
+            ("tool_call", {"name": "search_web", "input": {"query": "release"}}),
+            ("source", {"type": "web", "title": "Release", "url": "https://example.com/release"}),
+            ("message", {"content": "Final answer"}),
+            ("usage", {"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25}),
+            ("agent_status", {"run_id": "run-1", "status": "completed", "reason": None}),
+            ("done", {"session_id": "agent-session", "agent_run_id": "run-1"}),
+        ])
+        with patch("app.agents.orchestrator.run_agent", return_value=events) as agent:
+            result = orchestrate_request(self.request("Research and compare sources"))
+        agent.assert_called_once()
+        self.assertEqual(result.session_id, "agent-session")
+        self.assertEqual(result.assistant_message.content, "Final answer")
+        self.assertEqual(result.tool_calls[0].name, "search_web")
+        self.assertEqual(result.sources[0].type, "web")
+        self.assertEqual(result.usage.total_tokens, 25)
+        self.assertIsNone(result.error)
 
     def test_two_tools_observations_and_usage_are_persisted(self) -> None:
         search = ProviderToolCall("call-1", "search_web", '{"query":"release"}')
