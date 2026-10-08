@@ -77,6 +77,8 @@ class StoredSession(BaseModel):
     session_id: str
     title: str
     updated_at: str
+    folder_id: str | None = None
+    position: int = 0
 
 
 class SessionTitlePatch(BaseModel):

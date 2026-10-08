@@ -53,9 +53,24 @@ CREATE TABLE IF NOT EXISTS workspaces (
     updated_at TIMESTAMPTZ NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS project_folders (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    parent_id TEXT REFERENCES project_folders(id),
+    name TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_folders_parent
+ON project_folders (workspace_id, parent_id, position);
+
 CREATE TABLE IF NOT EXISTS chat_sessions (
     session_id TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    folder_id TEXT REFERENCES project_folders(id),
+    position INTEGER NOT NULL DEFAULT 0,
     title TEXT,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL
@@ -166,13 +181,20 @@ def _initialize_schema(connection, placeholder: str, id_type: str, database_key:
         schema = _SCHEMA_TEMPLATE.format(id_type=id_type)
         if placeholder == "?":
             connection.executescript(schema)
-            if "title" not in {row["name"] for row in connection.execute("PRAGMA table_info(chat_sessions)")}:
+            session_columns = {row["name"] for row in connection.execute("PRAGMA table_info(chat_sessions)")}
+            if "title" not in session_columns:
                 connection.execute("ALTER TABLE chat_sessions ADD COLUMN title TEXT")
+            if "folder_id" not in session_columns:
+                connection.execute("ALTER TABLE chat_sessions ADD COLUMN folder_id TEXT REFERENCES project_folders(id)")
+            if "position" not in session_columns:
+                connection.execute("ALTER TABLE chat_sessions ADD COLUMN position INTEGER NOT NULL DEFAULT 0")
         else:
             for statement in schema.split(";"):
                 if statement.strip():
                     connection.execute(statement)
             connection.execute("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS title TEXT")
+            connection.execute("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS folder_id TEXT REFERENCES project_folders(id)")
+            connection.execute("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS position INTEGER NOT NULL DEFAULT 0")
         _ensure_default_workspace(connection, placeholder)
         connection.commit()
         _initialized_databases.add(database_key)
@@ -306,16 +328,142 @@ def list_sessions(workspace_id: str | None = None) -> list[dict]:
                        WHERE first.session_id = m.session_id AND first.role = 'user'
                        ORDER BY first.id ASC LIMIT 1
                    ), 'New Chat') AS title,
-                   CAST(MAX(m.created_at) AS TEXT) AS updated_at
+                   CAST(MAX(m.created_at) AS TEXT) AS updated_at,
+                   s.folder_id,
+                   s.position
             FROM chat_messages AS m
             JOIN chat_sessions AS s ON s.session_id = m.session_id
             {workspace_filter}
-            GROUP BY m.session_id, s.title
+            GROUP BY m.session_id, s.title, s.folder_id, s.position
             ORDER BY MAX(m.created_at) DESC, MAX(m.id) DESC
             """,
             (workspace_id,) if workspace_id else (),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def list_project_tree(workspace_id: str) -> dict[str, list[dict]]:
+    """Return the persisted folder tree and its sessions for one workspace."""
+    if not get_workspace(workspace_id):
+        raise ValueError("Workspace not found")
+    with _connection() as (connection, placeholder):
+        folders = connection.execute(
+            f"""SELECT id, workspace_id, parent_id, name, position,
+                       CAST(created_at AS TEXT) AS created_at, CAST(updated_at AS TEXT) AS updated_at
+                FROM project_folders WHERE workspace_id = {placeholder}
+                ORDER BY position, created_at, id""",
+            (workspace_id,),
+        ).fetchall()
+    sessions = list_sessions(workspace_id)
+    sessions.sort(key=lambda item: (item["position"], item["updated_at"], item["session_id"]))
+    return {"folders": [dict(row) for row in folders], "sessions": sessions}
+
+
+def _ordered_project_items(cursor, placeholder: str, workspace_id: str, parent_id: str | None, excluded: tuple[str, str] | None = None) -> list[tuple[str, str]]:
+    parent_filter = f"parent_id = {placeholder}" if parent_id else "parent_id IS NULL"
+    folder_rows = cursor.execute(
+        f"SELECT id, position FROM project_folders WHERE workspace_id = {placeholder} AND {parent_filter}",
+        (workspace_id, parent_id) if parent_id else (workspace_id,),
+    ).fetchall()
+    folder_filter = f"folder_id = {placeholder}" if parent_id else "folder_id IS NULL"
+    session_rows = cursor.execute(
+        f"SELECT session_id AS id, position FROM chat_sessions WHERE workspace_id = {placeholder} AND {folder_filter}",
+        (workspace_id, parent_id) if parent_id else (workspace_id,),
+    ).fetchall()
+    items = [("folder", row["id"], row["position"]) for row in folder_rows]
+    items += [("session", row["id"], row["position"]) for row in session_rows]
+    items.sort(key=lambda item: (item[2], item[0], item[1]))
+    return [(kind, identifier) for kind, identifier, _ in items if excluded != (kind, identifier)]
+
+
+def _write_project_positions(cursor, placeholder: str, items: list[tuple[str, str]]) -> None:
+    for position, (kind, identifier) in enumerate(items):
+        table, column = ("project_folders", "id") if kind == "folder" else ("chat_sessions", "session_id")
+        cursor.execute(
+            f"UPDATE {table} SET position = {placeholder} WHERE {column} = {placeholder}",
+            (position, identifier),
+        )
+
+
+def create_project_folder(workspace_id: str, name: str, parent_id: str | None = None) -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    folder_id = str(uuid4())
+    with _connection() as (connection, placeholder):
+        with closing(connection.cursor()) as cursor:
+            if not cursor.execute(f"SELECT 1 FROM workspaces WHERE id = {placeholder}", (workspace_id,)).fetchone():
+                raise ValueError("Workspace not found")
+            if parent_id and not cursor.execute(
+                f"SELECT 1 FROM project_folders WHERE id = {placeholder} AND workspace_id = {placeholder}",
+                (parent_id, workspace_id),
+            ).fetchone():
+                raise ValueError("Parent folder not found in workspace")
+            position = len(_ordered_project_items(cursor, placeholder, workspace_id, parent_id))
+            cursor.execute(
+                f"INSERT INTO project_folders (id, workspace_id, parent_id, name, position, created_at, updated_at) VALUES ({', '.join([placeholder] * 7)})",
+                (folder_id, workspace_id, parent_id, name, position, now, now),
+            )
+    return next(item for item in list_project_tree(workspace_id)["folders"] if item["id"] == folder_id)
+
+
+def rename_project_folder(folder_id: str, workspace_id: str, name: str) -> dict | None:
+    now = datetime.now(timezone.utc).isoformat()
+    with _connection() as (connection, placeholder):
+        cursor = connection.execute(
+            f"UPDATE project_folders SET name = {placeholder}, updated_at = {placeholder} WHERE id = {placeholder} AND workspace_id = {placeholder}",
+            (name, now, folder_id, workspace_id),
+        )
+        if cursor.rowcount == 0:
+            return None
+    return next(item for item in list_project_tree(workspace_id)["folders"] if item["id"] == folder_id)
+
+
+def move_project_item(workspace_id: str, item_type: str, item_id: str, parent_id: str | None, position: int) -> dict[str, list[dict]]:
+    """Move one folder/session and normalize the target order atomically."""
+    if item_type not in {"folder", "session"}:
+        raise ValueError("Invalid project item type")
+    with _connection() as (connection, placeholder):
+        with closing(connection.cursor()) as cursor:
+            if parent_id and not cursor.execute(
+                f"SELECT 1 FROM project_folders WHERE id = {placeholder} AND workspace_id = {placeholder}",
+                (parent_id, workspace_id),
+            ).fetchone():
+                raise ValueError("Target folder not found in workspace")
+            if item_type == "folder":
+                row = cursor.execute(
+                    f"SELECT parent_id FROM project_folders WHERE id = {placeholder} AND workspace_id = {placeholder}",
+                    (item_id, workspace_id),
+                ).fetchone()
+                if not row:
+                    raise ValueError("Folder not found in workspace")
+                ancestor = parent_id
+                while ancestor:
+                    if ancestor == item_id:
+                        raise ValueError("A folder cannot be moved into itself or its descendants")
+                    parent = cursor.execute(
+                        f"SELECT parent_id FROM project_folders WHERE id = {placeholder} AND workspace_id = {placeholder}",
+                        (ancestor, workspace_id),
+                    ).fetchone()
+                    ancestor = parent["parent_id"] if parent else None
+                cursor.execute(
+                    f"UPDATE project_folders SET parent_id = {placeholder}, updated_at = {placeholder} WHERE id = {placeholder}",
+                    (parent_id, datetime.now(timezone.utc).isoformat(), item_id),
+                )
+            else:
+                row = cursor.execute(
+                    f"SELECT folder_id FROM chat_sessions WHERE session_id = {placeholder} AND workspace_id = {placeholder}",
+                    (item_id, workspace_id),
+                ).fetchone()
+                if not row:
+                    raise ValueError("Session not found in workspace")
+                cursor.execute(
+                    f"UPDATE chat_sessions SET folder_id = {placeholder} WHERE session_id = {placeholder}",
+                    (parent_id, item_id),
+                )
+            items = _ordered_project_items(cursor, placeholder, workspace_id, parent_id, (item_type, item_id))
+            target = max(0, min(position, len(items)))
+            items.insert(target, (item_type, item_id))
+            _write_project_positions(cursor, placeholder, items)
+    return list_project_tree(workspace_id)
 
 
 def rename_session(session_id: str, workspace_id: str | None, title: str) -> dict | None:
@@ -659,6 +807,7 @@ def delete_workspace_business(workspace_id: str) -> dict[str, int]:
             messages = cursor.rowcount
             cursor.execute(f"DELETE FROM chat_sessions WHERE workspace_id = {placeholder}", (workspace_id,))
             sessions = cursor.rowcount
+            cursor.execute(f"DELETE FROM project_folders WHERE workspace_id = {placeholder}", (workspace_id,))
             cursor.execute(f"DELETE FROM workspaces WHERE id = {placeholder}", (workspace_id,))
             if cursor.rowcount != 1:
                 raise ValueError("Workspace not found")
