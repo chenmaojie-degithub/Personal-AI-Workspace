@@ -77,6 +77,8 @@ export type StoredSession = {
   session_id: string
   title: string
   updated_at: string
+  folder_id: string | null
+  position: number
 }
 
 export type ToolCallLog = {
