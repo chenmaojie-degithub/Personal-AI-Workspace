@@ -18,12 +18,12 @@ class DeepSeekProvider:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=messages,
-            tools=tools,
-        )
+        request: dict[str, Any] = {"model": self._model, "messages": messages, "tools": tools}
+        if max_tokens is not None:
+            request["max_tokens"] = max_tokens
+        response = self._client.chat.completions.create(**request)
         message = response.choices[0].message
         tool_calls = tuple(
             ProviderToolCall(

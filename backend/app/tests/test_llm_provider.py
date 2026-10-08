@@ -130,6 +130,17 @@ class DeepSeekProviderTests(unittest.TestCase):
 
         self.assertIsNone(provider.complete([{"role": "user", "content": "test"}]).usage)
 
+    @patch("app.providers.deepseek.OpenAI")
+    def test_completion_limit_is_forwarded_to_provider(self, openai) -> None:
+        openai.return_value.chat.completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok", tool_calls=None))],
+            model="deepseek-flash", usage=None,
+        )
+        DeepSeekProvider("test-key", "https://api.deepseek.com", "deepseek-flash").complete(
+            [{"role": "user", "content": "test"}], max_tokens=321,
+        )
+        self.assertEqual(openai.return_value.chat.completions.create.call_args.kwargs["max_tokens"], 321)
+
 
 if __name__ == "__main__":
     unittest.main()

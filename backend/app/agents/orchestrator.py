@@ -118,6 +118,12 @@ def _execution_limit_reason(started: float, model_calls: int, budget_tokens: int
     return None
 
 
+def _completion_budget(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None, spent: int) -> int:
+    request_chars = len(json.dumps({"messages": messages, "tools": tools}, ensure_ascii=False))
+    estimated_input = max(1, request_chars // 3)
+    return max(0, min(settings.agent_max_completion_tokens, settings.agent_token_budget - spent - estimated_input))
+
+
 def _set_plan_step(plan: list[dict[str, object]], index: int, title: str, status: str) -> None:
     while len(plan) < index:
         plan.append({"index": len(plan) + 1, "title": title, "status": "pending"})
@@ -170,7 +176,10 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
             },
             *({"role": item.role, "content": item.content} for item in req.messages),
         ]
-        plan_response = provider.complete(planner_messages, tools=None)
+        plan_response = provider.complete(
+            planner_messages, tools=None,
+            max_tokens=max(1, _completion_budget(planner_messages, None, budget_tokens)),
+        )
         _raise_if_cancelled(run_id)
         model_calls += 1
         provider_name, model_name = plan_response.provider, plan_response.model
@@ -213,7 +222,11 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
             if step_index:
                 update_agent_run(run_id, status="replanning", plan=plan, usage=usage if usage_complete else None)
                 yield "agent_status", {"run_id": run_id, "status": "replanning", "reason": None}
-            response = provider.complete(messages, tools=tools)
+            max_tokens = _completion_budget(messages, tools, budget_tokens)
+            if max_tokens <= 0:
+                stop_reason = "token_budget"
+                break
+            response = provider.complete(messages, tools=tools, max_tokens=max_tokens)
             _raise_if_cancelled(run_id)
             model_calls += 1
             provider_name, model_name = response.provider, response.model
@@ -334,16 +347,23 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                         "Clearly state what remains incomplete. Do not call another tool."
                     ),
                 })
-                response = provider.complete(messages, tools=None)
-                _raise_if_cancelled(run_id)
-                model_calls += 1
-                provider_name, model_name = response.provider, response.model
-                usage = _usage_sum(usage, response.usage) if usage_complete else None
-                if response.usage is None:
-                    usage_complete = False
-                    usage = None
-                budget_tokens += response.usage.total_tokens if response.usage else _estimated_tokens(messages, response)
-                content = response.content.strip()
+                max_tokens = _completion_budget(messages, None, budget_tokens)
+                if max_tokens <= 0:
+                    response = None
+                else:
+                    response = provider.complete(messages, tools=None, max_tokens=max_tokens)
+                if response is None:
+                    content = f"Agent stopped because the {stop_reason} limit was reached before a final answer was available."
+                else:
+                    _raise_if_cancelled(run_id)
+                    model_calls += 1
+                    provider_name, model_name = response.provider, response.model
+                    usage = _usage_sum(usage, response.usage) if usage_complete else None
+                    if response.usage is None:
+                        usage_complete = False
+                        usage = None
+                    budget_tokens += response.usage.total_tokens if response.usage else _estimated_tokens(messages, response)
+                    content = response.content.strip()
             if not content:
                 content = f"Agent stopped because the {stop_reason} limit was reached before a final answer was available."
 

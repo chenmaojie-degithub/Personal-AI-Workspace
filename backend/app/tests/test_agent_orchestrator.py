@@ -21,9 +21,11 @@ class Provider:
     def __init__(self, *responses: LLMResponse) -> None:
         self.responses = list(responses)
         self.tools: list[list[dict] | None] = []
+        self.max_tokens: list[int | None] = []
 
-    def complete(self, messages, tools=None):
+    def complete(self, messages, tools=None, max_tokens=None):
         self.tools.append(tools)
+        self.max_tokens.append(max_tokens)
         return self.responses.pop(0)
 
 
@@ -62,12 +64,12 @@ class AgentOrchestratorTests(unittest.TestCase):
         search = ProviderToolCall("call-1", "search_web", '{"query":"release"}')
         analyze = ProviderToolCall("call-2", "analyze_data", '{"file_id":"sales.csv","operation":"shape"}')
         class AdaptiveProvider(Provider):
-            def complete(self, messages, tools=None):
+            def complete(self, messages, tools=None, max_tokens=None):
                 if len(self.tools) == 2:
                     self.assert_observation(messages, "Evidence")
                 if len(self.tools) == 3:
                     self.assert_observation(messages, '"rows": 3')
-                return super().complete(messages, tools)
+                return super().complete(messages, tools, max_tokens)
 
             @staticmethod
             def assert_observation(messages, expected):
@@ -98,6 +100,7 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertEqual(stored["total_tokens"], 36)
         self.assertEqual(len(stored["steps"]), 2)
         self.assertEqual([item["status"] for item in stored["plan"]], ["completed", "completed"])
+        self.assertTrue(all(value is not None and value <= database.settings.agent_max_completion_tokens for value in provider.max_tokens))
 
     def test_tool_failure_is_an_observation_and_does_not_crash(self) -> None:
         call = ProviderToolCall("call-1", "search_web", '{"query":"blocked"}')
@@ -206,8 +209,8 @@ class AgentOrchestratorTests(unittest.TestCase):
         clock = [0.0]
 
         class SlowProvider(Provider):
-            def complete(self, messages, tools=None):
-                result = super().complete(messages, tools)
+            def complete(self, messages, tools=None, max_tokens=None):
+                result = super().complete(messages, tools, max_tokens)
                 if len(self.tools) == 2:
                     clock[0] = 5.0
                 return result

@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     agent_max_model_calls: int = 8
     agent_timeout_seconds: int = 120
     agent_token_budget: int = 16_000
+    agent_max_completion_tokens: int = 800
     agent_tool_result_max_chars: int = 12_000
     agent_repeat_limit: int = 2
 
