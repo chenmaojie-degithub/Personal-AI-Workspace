@@ -405,11 +405,12 @@ def create_project_folder(workspace_id: str, name: str, parent_id: str | None = 
                 (parent_id, workspace_id),
             ).fetchone():
                 raise ValueError("Parent folder not found in workspace")
-            position = len(_ordered_project_items(cursor, placeholder, workspace_id, parent_id))
+            siblings = _ordered_project_items(cursor, placeholder, workspace_id, parent_id)
             cursor.execute(
                 f"INSERT INTO project_folders (id, workspace_id, parent_id, name, position, created_at, updated_at) VALUES ({', '.join([placeholder] * 7)})",
-                (folder_id, workspace_id, parent_id, name, position, now, now),
+                (folder_id, workspace_id, parent_id, name, 0, now, now),
             )
+            _write_project_positions(cursor, placeholder, [("folder", folder_id), *siblings])
     return next(item for item in list_project_tree(workspace_id)["folders"] if item["id"] == folder_id)
 
 

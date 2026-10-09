@@ -46,6 +46,9 @@ class ProjectTreeTests(unittest.TestCase):
 
     def test_hierarchy_and_session_order_persist(self) -> None:
         parent = self.add_folder("Agent")
+        self.assertEqual(parent["position"], 0)
+        shifted = self.client.get("/projects/tree", params={"workspace_id": self.workspace["id"]}).json()
+        self.assertTrue(all(item["position"] > 0 for item in shifted["sessions"]))
         child = self.add_folder("Research", parent["id"])
         moved = self.move("session", "two", child["id"])
         self.assertEqual(moved.status_code, 200)
