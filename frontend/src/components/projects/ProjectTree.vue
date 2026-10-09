@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ChevronDown, ChevronRight, Folder, FolderPlus, GripVertical, MessageSquare, MoreHorizontal, Plus } from 'lucide-vue-next'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { useSidebar } from '@/components/ui/sidebar'
 import DragPlaceholder from './DragPlaceholder.vue'
 import { useChat } from '@/lib/chat'
 import { useWorkspaces } from '@/lib/workspaces'
@@ -14,9 +15,11 @@ type DragState = {
   pointerId: number; row: Row; startX: number; startY: number; x: number; y: number;
   width: number; height: number; path: Array<{ x: number; y: number }>; target: DropTarget | null; valid: boolean
 }
+type ComposerState = 'closed' | 'opening' | 'open' | 'closing'
 
 const chat = useChat()
 const workspaces = useWorkspaces()
+const { isMobile } = useSidebar()
 const route = useRoute()
 const router = useRouter()
 const tree = ref<ProjectTreeData>({ folders: [], sessions: [] })
@@ -27,6 +30,18 @@ const editingKey = ref<string | null>(null)
 const titleDraft = ref('')
 const treeElement = ref<HTMLElement | null>(null)
 const drag = ref<DragState | null>(null)
+const addFolderButton = ref<HTMLElement | null>(null)
+const folderCard = ref<HTMLElement | null>(null)
+const folderDetails = ref<HTMLElement | null>(null)
+const folderInput = ref<HTMLInputElement | null>(null)
+const composerState = ref<ComposerState>('closed')
+const folderName = ref('')
+const folderError = ref<string | null>(null)
+const creatingFolder = ref(false)
+const folderCardStyle = ref({ left: '0px', top: '0px', width: '252px' })
+let folderAnimation: Animation | null = null
+let folderDetailsAnimation: Animation | null = null
+let folderTransitionId = 0
 let loadVersion = 0
 
 function children(parentId: string | null): Row[] {
@@ -95,12 +110,85 @@ function newChat() {
   if (route.path !== '/chat') void router.push('/chat')
 }
 
+function reducedMotion() { return window.matchMedia('(prefers-reduced-motion: reduce)').matches }
+function cancelFolderAnimation() {
+  folderTransitionId += 1
+  folderAnimation?.cancel()
+  folderDetailsAnimation?.cancel()
+  folderAnimation = null
+  folderDetailsAnimation = null
+}
+
+async function openFolderComposer() {
+  cancelFolderAnimation()
+  const id = folderTransitionId
+  const origin = addFolderButton.value?.getBoundingClientRect()
+  if (!origin) return
+  const width = Math.min(288, window.innerWidth - 24)
+  folderCardStyle.value = {
+    left: `${Math.max(12, Math.min(origin.right - width, window.innerWidth - width - 12))}px`,
+    top: `${Math.max(12, Math.min(origin.top, window.innerHeight - 190))}px`,
+    width: `${width}px`,
+  }
+  folderName.value = ''
+  folderError.value = null
+  composerState.value = 'opening'
+  await nextTick()
+  const card = folderCard.value
+  const destination = card?.getBoundingClientRect()
+  if (!card || !destination || reducedMotion()) {
+    if (id === folderTransitionId) { composerState.value = 'open'; folderInput.value?.focus() }
+    return
+  }
+  const offsetX = origin.left + origin.width / 2 - (destination.left + destination.width / 2)
+  const offsetY = origin.top + origin.height / 2 - (destination.top + destination.height / 2)
+  folderAnimation = card.animate([
+    { transform: `translate(${offsetX}px, ${offsetY}px) scale(${origin.width / destination.width}, ${origin.height / destination.height})`, transformOrigin: 'top right', borderRadius: '999px', opacity: .82 },
+    { transform: 'translate(0) scale(1)', transformOrigin: 'top right', borderRadius: '18px', opacity: 1 },
+  ], { duration: 480, easing: 'cubic-bezier(.22,1,.36,1)', composite: 'replace' })
+  try { await folderAnimation.finished } catch { return }
+  if (id === folderTransitionId) { folderAnimation = null; composerState.value = 'open'; folderInput.value?.focus() }
+}
+
+async function closeFolderComposer() {
+  if (creatingFolder.value) return
+  cancelFolderAnimation()
+  const id = folderTransitionId
+  composerState.value = 'closing'
+  if (!reducedMotion() && folderDetails.value) {
+    folderDetailsAnimation = folderDetails.value.animate(
+      [{ opacity: 1, transform: 'translateY(0)' }, { opacity: 0, transform: 'translateY(-5px)' }],
+      { duration: 160, easing: 'cubic-bezier(.4,0,.6,1)', fill: 'forwards' },
+    )
+    try { await folderDetailsAnimation.finished } catch { return }
+    folderDetailsAnimation = null
+  }
+  if (id !== folderTransitionId) return
+  const origin = addFolderButton.value?.getBoundingClientRect()
+  const card = folderCard.value
+  const from = card?.getBoundingClientRect()
+  if (!origin || !card || !from || reducedMotion()) {
+    if (id === folderTransitionId) composerState.value = 'closed'
+    return
+  }
+  const offsetX = origin.left + origin.width / 2 - (from.left + from.width / 2)
+  const offsetY = origin.top + origin.height / 2 - (from.top + from.height / 2)
+  folderAnimation = card.animate([
+    { transform: 'translate(0) scale(1)', transformOrigin: 'top right', borderRadius: '18px', opacity: 1 },
+    { transform: `translate(${offsetX}px, ${offsetY}px) scale(${origin.width / from.width}, ${origin.height / from.height})`, transformOrigin: 'top right', borderRadius: '999px', opacity: .82 },
+  ], { duration: 400, easing: 'cubic-bezier(.4,0,.2,1)', composite: 'replace' })
+  try { await folderAnimation.finished } catch { return }
+  if (id === folderTransitionId) { folderAnimation = null; composerState.value = 'closed' }
+}
+
 async function addFolder() {
-  const name = window.prompt('新文件夹名称')?.trim()
+  const name = folderName.value.trim()
   const workspaceId = workspaces.currentId.value
   if (!name || !workspaceId) return
-  try { await createProjectFolder(workspaceId, name); await load() }
-  catch (cause) { error.value = `创建失败：${cause instanceof Error ? cause.message : '未知错误'}` }
+  creatingFolder.value = true
+  folderError.value = null
+  try { await createProjectFolder(workspaceId, name); await load(); creatingFolder.value = false; await closeFolderComposer() }
+  catch (cause) { creatingFolder.value = false; folderError.value = `创建失败：${cause instanceof Error ? cause.message : '未知错误'}` }
 }
 
 function startRename(row: Row) {
@@ -137,11 +225,13 @@ function isDescendant(folderId: string | null, ancestorId: string) {
   return false
 }
 
-function targetForPoint(x: number, y: number, dragged: Row): DropTarget | null {
+function targetForPoint(x: number, y: number, dragged: Row, current: DropTarget | null): DropTarget | null {
+  const bounds = treeElement.value?.getBoundingClientRect()
+  if (!bounds || x < bounds.left || x > bounds.right || y < bounds.top || y > bounds.bottom) return null
   const element = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-project-row]')
-  if (!element || !treeElement.value?.contains(element)) return null
+  if (!element || !treeElement.value?.contains(element)) return current
   const hovered = rows.value.find(item => item.key === element.dataset.projectRow)
-  if (!hovered || hovered.key === dragged.key) return null
+  if (!hovered || hovered.key === dragged.key) return current
   const rect = element.getBoundingClientRect()
   const intoFolder = hovered.kind === 'folder' && x > rect.left + 36 && y > rect.top + rect.height * 0.25 && y < rect.bottom - rect.height * 0.15
   const parentId = intoFolder ? hovered.id : hovered.parentId
@@ -178,7 +268,7 @@ function onDragMove(event: PointerEvent) {
   if (!state || event.pointerId !== state.pointerId) return
   state.x = event.clientX; state.y = event.clientY
   if (state.path.length < 80) state.path.push({ x: event.clientX, y: event.clientY })
-  const target = targetForPoint(event.clientX, event.clientY, state.row)
+  const target = targetForPoint(event.clientX, event.clientY, state.row, state.target)
   state.target = target
   state.valid = Boolean(target) && !target?.invalid
   const bounds = treeElement.value?.getBoundingClientRect()
@@ -239,7 +329,7 @@ async function keyboardMove(row: Row, offset: number) {
 
 watch(workspaces.currentId, () => { restoreCollapsed(); void load() }, { immediate: true })
 watch(() => chat.sessions.value.map(item => `${item.session_id}:${item.title}:${item.updated_at}`).join('|'), () => { if (!loading.value) void load() })
-onBeforeUnmount(() => detachDragListeners())
+onBeforeUnmount(() => { detachDragListeners(); cancelFolderAnimation() })
 </script>
 
 <template>
@@ -247,7 +337,7 @@ onBeforeUnmount(() => detachDragListeners())
     <div class="flex items-center justify-between px-2 pb-1">
       <span class="text-[11px] font-medium uppercase tracking-wide text-sidebar-foreground/45">项目</span>
       <div class="flex items-center gap-0.5">
-        <button type="button" class="rounded p-1 text-sidebar-foreground/55 hover:bg-sidebar-accent hover:text-sidebar-foreground" title="新文件夹" aria-label="新文件夹" @click="addFolder"><FolderPlus class="size-3.5" /></button>
+        <button ref="addFolderButton" type="button" class="rounded p-1 text-sidebar-foreground/55 hover:bg-sidebar-accent hover:text-sidebar-foreground" :class="composerState !== 'closed' ? 'invisible' : ''" title="新建项目" aria-label="新建项目" @click="openFolderComposer"><FolderPlus class="size-3.5" /></button>
         <button type="button" class="rounded p-1 text-sidebar-foreground/55 hover:bg-sidebar-accent hover:text-sidebar-foreground" title="新聊天" aria-label="新聊天" @click="newChat"><Plus class="size-3.5" /></button>
       </div>
     </div>
@@ -257,8 +347,8 @@ onBeforeUnmount(() => detachDragListeners())
       <p v-else-if="!rows.length" class="px-2 py-2 text-xs text-sidebar-foreground/45">暂无项目内容</p>
       <template v-for="row in rows" :key="row.key">
         <DragPlaceholder v-if="drag?.target?.beforeKey === row.key" :depth="drag.target.depth" :height="drag.height" :valid="drag.valid" />
-        <div v-show="drag?.row.key !== row.key" :data-project-row="row.key" class="group flex h-8 min-w-0 items-center rounded-md text-sidebar-foreground/75 transition-[transform,background-color] hover:bg-sidebar-accent/60"
-          :class="row.kind === 'session' && chat.sessionId.value === row.id && route.path === '/chat' ? 'bg-sidebar-accent text-sidebar-accent-foreground' : ''"
+        <div :data-project-row="row.key" class="group flex h-8 min-w-0 items-center rounded-md text-sidebar-foreground/75 transition-[background-color,opacity] hover:bg-sidebar-accent/60"
+          :class="[row.kind === 'session' && chat.sessionId.value === row.id && route.path === '/chat' ? 'bg-sidebar-accent text-sidebar-accent-foreground' : '', drag?.row.key === row.key ? 'invisible pointer-events-none' : '']"
           :style="{ paddingLeft: `${row.depth * 14 + 2}px` }" tabindex="0"
           @keydown.alt.up.prevent="keyboardMove(row, -1)" @keydown.alt.down.prevent="keyboardMove(row, 1)"
           @keydown.right.prevent="row.kind === 'folder' && collapsed.has(row.id) && toggle(row.id)"
@@ -288,5 +378,28 @@ onBeforeUnmount(() => detachDragListeners())
       <Folder v-if="drag.row.kind === 'folder'" class="size-3.5" /><MessageSquare v-else class="size-3.5" />
       <span class="truncate">{{ drag.row.title }}</span>
     </div>
+    <Teleport v-if="composerState !== 'closed'" :to="isMobile ? '[data-project-portal]' : 'body'">
+      <section ref="folderCard" class="pointer-events-auto fixed z-[100] overflow-hidden rounded-[18px] border border-white/12 bg-[#15181e]/98 text-white shadow-[0_24px_70px_rgba(0,0,0,.52)] backdrop-blur-xl" :style="folderCardStyle">
+        <header class="flex items-center justify-between border-b border-white/[.08] px-4 py-3">
+          <div><div class="text-sm font-medium text-white/90">新建项目</div><div class="mt-0.5 text-[11px] text-white/38">将相关对话整理到同一目录</div></div>
+          <button type="button" class="rounded-lg px-2 py-1 text-xs text-white/45 hover:bg-white/[.07] hover:text-white/80" @click="closeFolderComposer">取消</button>
+        </header>
+        <form ref="folderDetails" class="p-4" :class="composerState === 'opening' ? 'folder-details-enter' : ''" @submit.prevent="addFolder">
+          <label class="block text-[11px] text-white/50" for="project-folder-name">项目名称</label>
+          <input id="project-folder-name" ref="folderInput" v-model="folderName" maxlength="100" autocomplete="off" class="mt-2 h-9 w-full rounded-lg border border-white/12 bg-white/[.045] px-3 text-sm text-white outline-none transition-colors placeholder:text-white/25 focus:border-sky-300/45" placeholder="例如：Agent 实验" @keydown.esc.prevent="closeFolderComposer" />
+          <p v-if="folderError" class="mt-2 text-xs text-red-300">{{ folderError }}</p>
+          <div class="mt-4 flex justify-end gap-2">
+            <button type="button" class="rounded-lg px-3 py-1.5 text-xs text-white/50 hover:bg-white/[.07]" :disabled="creatingFolder" @click="closeFolderComposer">取消</button>
+            <button type="submit" class="rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-[#111318] transition-opacity disabled:opacity-35" :disabled="!folderName.trim() || creatingFolder">{{ creatingFolder ? '创建中…' : '创建' }}</button>
+          </div>
+        </form>
+      </section>
+    </Teleport>
   </section>
 </template>
+
+<style scoped>
+.folder-details-enter { animation: folder-details-in 220ms 190ms cubic-bezier(.22,1,.36,1) both; }
+@keyframes folder-details-in { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .folder-details-enter { animation: none; } }
+</style>
