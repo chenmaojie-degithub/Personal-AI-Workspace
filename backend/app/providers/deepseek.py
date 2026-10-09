@@ -6,7 +6,7 @@ from typing import Any, Iterator
 from openai import OpenAI
 
 from app.providers.base import LLMResponse, LLMStreamEvent, LLMUsage, ProviderToolCall
-from app.providers.text_tool_calls import TextToolCallFilter
+from app.providers.text_tool_calls import TextToolCallError, TextToolCallFilter
 
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,12 @@ class DeepSeekProvider:
             for tool_call in (message.tool_calls or [])
         )
         text_filter = TextToolCallFilter(tools)
-        normalized = text_filter.feed(message.content or "") + text_filter.finish()
+        try:
+            normalized = text_filter.feed(message.content or "") + text_filter.finish()
+        except TextToolCallError:
+            if not tool_calls:
+                raise
+            normalized = []
         text_tool_calls = tuple(item for item in normalized if isinstance(item, ProviderToolCall))
         raw_usage = getattr(response, "usage", None)
         usage_values = (
@@ -82,6 +87,8 @@ class DeepSeekProvider:
         response = self._client.chat.completions.create(**request)
         pending_tools: dict[int, dict[str, str]] = {}
         text_filter = TextToolCallFilter(tools)
+        pending_text_tools: list[ProviderToolCall] = []
+        text_tool_error: TextToolCallError | None = None
         model = self._model
         try:
             for chunk in response:
@@ -99,22 +106,41 @@ class DeepSeekProvider:
                     continue
                 delta = chunk.choices[0].delta
                 if delta.content:
-                    for item in text_filter.feed(delta.content):
-                        yield LLMStreamEvent("tool_call", tool_call=item) if isinstance(item, ProviderToolCall) else LLMStreamEvent("message", content=item)
+                    if text_tool_error is None:
+                        try:
+                            for item in text_filter.feed(delta.content):
+                                if isinstance(item, ProviderToolCall):
+                                    pending_text_tools.append(item)
+                                else:
+                                    yield LLMStreamEvent("message", content=item)
+                        except TextToolCallError as exc:
+                            text_tool_error = exc
                 for fragment in delta.tool_calls or []:
                     item = pending_tools.setdefault(fragment.index, {"id": "", "name": "", "arguments": ""})
                     item["id"] += fragment.id or ""
                     if fragment.function:
                         item["name"] += fragment.function.name or ""
                         item["arguments"] += fragment.function.arguments or ""
-            for item in text_filter.finish():
-                yield LLMStreamEvent("tool_call", tool_call=item) if isinstance(item, ProviderToolCall) else LLMStreamEvent("message", content=item)
+            if text_tool_error is None:
+                try:
+                    for item in text_filter.finish():
+                        if isinstance(item, ProviderToolCall):
+                            pending_text_tools.append(item)
+                        else:
+                            yield LLMStreamEvent("message", content=item)
+                except TextToolCallError as exc:
+                    text_tool_error = exc
             for index in sorted(pending_tools):
                 item = pending_tools[index]
                 yield LLMStreamEvent(
                     "tool_call",
                     tool_call=ProviderToolCall(item["id"], item["name"], item["arguments"] or "{}"),
                 )
+            if not pending_tools:
+                if text_tool_error is not None:
+                    raise text_tool_error
+                for item in pending_text_tools:
+                    yield LLMStreamEvent("tool_call", tool_call=item)
             logger.info(
                 "llm stream complete provider=%s requested_model=%s actual_model=%s",
                 self._provider_name, self._model, model,

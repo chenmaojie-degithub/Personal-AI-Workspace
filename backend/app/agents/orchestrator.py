@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Iterator
 from threading import Event, Lock
@@ -21,11 +22,13 @@ from app.models.chat import ChartArtifact, ChatRequest, CitationSource, ToolCall
 from app.providers.base import LLMResponse, LLMUsage
 from app.providers.factory import create_llm_provider
 from app.providers.registry import resolve_model
+from app.providers.text_tool_calls import TextToolCallError
 from app.tools.knowledge import knowledge_citations
 from app.tools.registry import execute_tool_call, get_agent_tool_specs
 from app.tools.web_search import web_citations
 
 AgentEvent = tuple[str, object]
+logger = logging.getLogger(__name__)
 _cancel_events: dict[str, Event] = {}
 _cancel_lock = Lock()
 
@@ -138,6 +141,13 @@ def _completion_budget(messages: list[dict[str, Any]], tools: list[dict[str, Any
     request_chars = len(json.dumps({"messages": messages, "tools": tools}, ensure_ascii=False))
     estimated_input = max(1, request_chars // 3)
     return max(0, min(settings.agent_max_completion_tokens, settings.agent_token_budget - spent - estimated_input))
+
+
+def _failed_call_token_estimate(
+    messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None, max_tokens: int,
+) -> int:
+    request_chars = len(json.dumps({"messages": messages, "tools": tools}, ensure_ascii=False))
+    return max(1, request_chars // 3) + min(max_tokens, 128)
 
 
 def _set_plan_step(plan: list[dict[str, object]], index: int, title: str, status: str) -> None:
@@ -285,7 +295,50 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
             if max_tokens <= 0:
                 stop_reason = "token_budget"
                 break
-            response = provider.complete(messages, tools=tools, max_tokens=max_tokens)
+            try:
+                response = provider.complete(messages, tools=tools, max_tokens=max_tokens)
+            except TextToolCallError as exc:
+                model_calls += 1
+                budget_tokens += _failed_call_token_estimate(messages, tools, max_tokens)
+                logger.warning(
+                    "agent text tool call rejected run_id=%s error_type=%s repair_attempt=1",
+                    run_id, exc.code,
+                )
+                _raise_if_cancelled(run_id)
+                repair_limit = _execution_limit_reason(started, model_calls, budget_tokens)
+                if repair_limit:
+                    stop_reason = repair_limit
+                    break
+                repair_messages = [
+                    *messages,
+                    {
+                        "role": "system",
+                        "content": (
+                            "Your previous tool call was rejected. Try once more using the native structured "
+                            "tool call interface and exactly one registered tool schema. Do not emit tool-call "
+                            "control markers or add undeclared arguments."
+                        ),
+                    },
+                ]
+                repair_max_tokens = _completion_budget(repair_messages, tools, budget_tokens)
+                if repair_max_tokens <= 0:
+                    stop_reason = "token_budget"
+                    break
+                yield "agent_status", {
+                    "run_id": run_id, "status": "repairing_tool_call", "reason": exc.code,
+                }
+                try:
+                    response = provider.complete(
+                        repair_messages, tools=tools, max_tokens=repair_max_tokens,
+                    )
+                except TextToolCallError as repair_exc:
+                    logger.warning(
+                        "agent text tool call repair failed run_id=%s error_type=%s",
+                        run_id, repair_exc.code,
+                    )
+                    raise RuntimeError(
+                        f"tool_call_repair_failed:{repair_exc.code}"
+                    ) from repair_exc
             _raise_if_cancelled(run_id)
             model_calls += 1
             provider_name, model_name = response.provider, response.model

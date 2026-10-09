@@ -12,6 +12,7 @@ from app.api.routes.chat_stream import _routed_events
 from app.core import database
 from app.models.chat import ChatMessage, ChatRequest, ChatSettings
 from app.providers.base import LLMResponse, LLMStreamEvent, LLMUsage, ProviderToolCall
+from app.providers.text_tool_calls import TextToolCallError
 
 
 def response(content: str, calls: tuple[ProviderToolCall, ...] = (), tokens: int = 10) -> LLMResponse:
@@ -246,6 +247,66 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertTrue(any(event == "agent_step" and data["status"] == "failed" for event, data in events))
         self.assertTrue(any(event == "message" and data["content"] == "Explain failure" for event, data in events))
         self.assertFalse(any(event == "error" for event, _ in events))
+
+    def test_invalid_text_tool_call_gets_one_controlled_repair(self) -> None:
+        call = ProviderToolCall("call-1", "search_web", '{"query":"official release"}')
+
+        class RepairProvider(Provider):
+            def complete(self, messages, tools=None, max_tokens=None):
+                self.tools.append(tools)
+                self.max_tokens.append(max_tokens)
+                item = self.responses.pop(0)
+                if isinstance(item, Exception):
+                    raise item
+                return item
+
+        provider = RepairProvider(
+            response('{"steps":["Search","Answer"]}'),
+            TextToolCallError("invalid_syntax_or_schema"),
+            response("", (call,)),
+            response("Final answer"),
+        )
+        with patch("app.agents.orchestrator.create_llm_provider", return_value=provider), patch(
+            "app.tools.registry.web_search",
+            return_value={"query": "official release", "results": []},
+        ), patch("app.agents.orchestrator.resolve_model") as model:
+            model.return_value.supports_tools = True
+            events = list(run_agent(self.request("Research current web sources", web_search=True)))
+
+        self.assertEqual([event for event, _ in events].count("tool_call"), 1)
+        self.assertTrue(any(
+            event == "agent_status" and data["status"] == "repairing_tool_call"
+            for event, data in events
+        ))
+        self.assertTrue(any(event == "message" and data["content"] == "Final answer" for event, data in events))
+        self.assertEqual(len(provider.tools), 4)
+
+    def test_invalid_text_tool_call_repair_is_attempted_only_once(self) -> None:
+        class BrokenProvider(Provider):
+            def complete(self, messages, tools=None, max_tokens=None):
+                self.tools.append(tools)
+                self.max_tokens.append(max_tokens)
+                item = self.responses.pop(0)
+                if isinstance(item, Exception):
+                    raise item
+                return item
+
+        provider = BrokenProvider(
+            response('{"steps":["Search"]}'),
+            TextToolCallError("incomplete"),
+            TextToolCallError("invalid_syntax_or_schema"),
+        )
+        with patch("app.agents.orchestrator.create_llm_provider", return_value=provider), patch(
+            "app.agents.orchestrator.resolve_model"
+        ) as model, patch("app.tools.registry.web_search") as search_web:
+            model.return_value.supports_tools = True
+            events = list(run_agent(self.request("Research current web sources", web_search=True)))
+
+        search_web.assert_not_called()
+        self.assertEqual(len(provider.tools), 3)
+        final_status = [data for event, data in events if event == "agent_status"][-1]
+        self.assertEqual(final_status["status"], "failed")
+        self.assertIn("tool_call_repair_failed:invalid_syntax_or_schema", final_status["reason"])
 
     def test_successful_search_limit_removes_tool_before_final_decision(self) -> None:
         first = ProviderToolCall("call-1", "search_web", '{"query":"first"}')
