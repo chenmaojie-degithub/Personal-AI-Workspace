@@ -106,7 +106,11 @@ class WorkspaceTests(unittest.TestCase):
             result = orchestrate_chat(ChatRequest(workspace_id=a["id"], session_id="prompt-test", messages=[ChatMessage(role="user", content="hello")]))
         self.assertIsNone(result.error)
         self.assertIn("Answer as a programming tutor.", captured[0][0][0]["content"])
-        self.assertEqual(captured[0][1][0]["function"]["name"], "search_web")
+        self.assertIsNone(captured[0][1])
+        with patch("app.api.routes.chat.create_llm_provider", return_value=CaptureProvider()):
+            result = orchestrate_chat(ChatRequest(workspace_id=a["id"], session_id="search-test", messages=[ChatMessage(role="user", content="search the web")]))
+        self.assertIsNone(result.error)
+        self.assertEqual(captured[1][1][0]["function"]["name"], "search_web")
         self.assertEqual(self.client.delete(f"/workspaces/{default['id']}").status_code, 403)
 
     def test_workspace_rag_isolation_and_compensated_delete(self) -> None:

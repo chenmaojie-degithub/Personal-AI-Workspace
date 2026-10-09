@@ -30,6 +30,7 @@ def fake_settings(openrouter_key: str | None = "test-key") -> SimpleNamespace:
         openrouter_api_key=openrouter_key,
         openrouter_base_url="https://openrouter.ai/api/v1",
         openrouter_model="openrouter/free",
+        openrouter_fixed_model="nvidia/nemotron-3-super-120b-a12b:free",
     )
 
 
@@ -52,11 +53,11 @@ class OpenRouterTests(unittest.TestCase):
         req = ChatRequest(messages=[ChatMessage(role="user", content="Find current OpenAI news")], settings=ChatSettings(web_search=True))
         with patch("app.api.routes.chat_stream.create_llm_provider", return_value=provider), patch(
             "app.api.routes.chat_stream._should_use_rag", return_value=True
-        ), patch("app.api.routes.chat_stream.RAGService") as rag, patch(
+        ), patch("app.api.routes.chat_stream.get_rag_service") as rag_factory, patch(
             "app.api.routes.chat_stream.save_chat_turn"
         ), patch("app.services.web_search.DDGS") as ddgs:
             ddgs.return_value.text.return_value = ddgs_results
-            rag.return_value.retrieve.return_value = [RAGChunk("Local notes", "README.md", "doc-1", 3, 0.1)]
+            rag_factory.return_value.retrieve.return_value = [RAGChunk("Local notes", "README.md", "doc-1", 3, 0.1)]
             events = [(line.split("\n")[0].removeprefix("event: "), json.loads(line.split("data: ", 1)[1])) for line in _events(req)]
 
         messages = [data["content"] for kind, data in events if kind == "message"]
@@ -74,15 +75,36 @@ class OpenRouterTests(unittest.TestCase):
         with patch("app.providers.registry.settings", config), patch("app.providers.factory.settings", config):
             response = TestClient(app).get("/models")
             self.assertEqual(response.status_code, 200)
-            self.assertEqual([item["model_id"] for item in response.json()["models"]], ["deepseek", "openrouter/free"])
+            self.assertEqual(
+                [item["model_id"] for item in response.json()["models"]],
+                ["deepseek", "openrouter/free", "openrouter/fixed"],
+            )
             self.assertEqual(response.json()["default_model_id"], "deepseek")
             self.assertEqual(create_llm_provider("deepseek")._model, "deepseek-flash")
             self.assertIsInstance(create_llm_provider("openrouter/free"), OpenRouterProvider)
+            self.assertEqual(
+                create_llm_provider("openrouter/fixed")._model,
+                "nvidia/nemotron-3-super-120b-a12b:free",
+            )
 
     def test_unconfigured_openrouter_is_not_listed(self) -> None:
         with patch("app.providers.registry.settings", fake_settings(None)):
             response = TestClient(app).get("/models")
             self.assertEqual([item["model_id"] for item in response.json()["models"]], ["deepseek"])
+
+    def test_unknown_fixed_model_is_not_allowed_to_register_agent_tools(self) -> None:
+        config = fake_settings()
+        config.openrouter_fixed_model = "vendor/unknown-model:free"
+        with patch("app.providers.registry.settings", config):
+            fixed = next(item for item in TestClient(app).get("/models").json()["models"] if item["model_id"] == "openrouter/fixed")
+        self.assertFalse(fixed["supports_tools"])
+
+    def test_unknown_legacy_openrouter_model_is_not_allowed_agent_tools(self) -> None:
+        config = fake_settings()
+        config.openrouter_model = "vendor/unknown-model"
+        with patch("app.providers.registry.settings", config):
+            legacy = next(item for item in TestClient(app).get("/models").json()["models"] if item["model_id"] == "openrouter/free")
+        self.assertFalse(legacy["supports_tools"])
 
     @patch("app.providers.deepseek.OpenAI")
     def test_openrouter_maps_real_response_usage_and_provider(self, openai) -> None:

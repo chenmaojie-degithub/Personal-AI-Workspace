@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Iterator
 
 from openai import OpenAI
 
 from app.providers.base import LLMResponse, LLMStreamEvent, LLMUsage, ProviderToolCall
-from app.providers.text_tool_calls import TextToolCallFilter
+from app.providers.text_tool_calls import TextToolCallError, TextToolCallFilter
+
+
+logger = logging.getLogger(__name__)
 
 
 class DeepSeekProvider:
@@ -18,12 +22,12 @@ class DeepSeekProvider:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=messages,
-            tools=tools,
-        )
+        request: dict[str, Any] = {"model": self._model, "messages": messages, "tools": tools}
+        if max_tokens is not None:
+            request["max_tokens"] = max_tokens
+        response = self._client.chat.completions.create(**request)
         message = response.choices[0].message
         tool_calls = tuple(
             ProviderToolCall(
@@ -34,7 +38,12 @@ class DeepSeekProvider:
             for tool_call in (message.tool_calls or [])
         )
         text_filter = TextToolCallFilter(tools)
-        normalized = text_filter.feed(message.content or "") + text_filter.finish()
+        try:
+            normalized = text_filter.feed(message.content or "") + text_filter.finish()
+        except TextToolCallError:
+            if not tool_calls:
+                raise
+            normalized = []
         text_tool_calls = tuple(item for item in normalized if isinstance(item, ProviderToolCall))
         raw_usage = getattr(response, "usage", None)
         usage_values = (
@@ -47,10 +56,15 @@ class DeepSeekProvider:
             if raw_usage is not None and all(value is not None for value in usage_values)
             else None
         )
+        actual_model = getattr(response, "model", None) or self._model
+        logger.info(
+            "llm response provider=%s requested_model=%s actual_model=%s",
+            self._provider_name, self._model, actual_model,
+        )
         return LLMResponse(
             content="".join(item for item in normalized if isinstance(item, str)),
             tool_calls=tool_calls or text_tool_calls,
-            model=getattr(response, "model", None) or self._model,
+            model=actual_model,
             provider=self._provider_name,
             usage=usage,
         )
@@ -59,16 +73,22 @@ class DeepSeekProvider:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> Iterator[LLMStreamEvent]:
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=messages,
-            tools=tools,
-            stream=True,
-            stream_options={"include_usage": True},
-        )
+        request: dict[str, Any] = {
+            "model": self._model,
+            "messages": messages,
+            "tools": tools,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if max_tokens is not None:
+            request["max_tokens"] = max_tokens
+        response = self._client.chat.completions.create(**request)
         pending_tools: dict[int, dict[str, str]] = {}
         text_filter = TextToolCallFilter(tools)
+        pending_text_tools: list[ProviderToolCall] = []
+        text_tool_error: TextToolCallError | None = None
         model = self._model
         try:
             for chunk in response:
@@ -86,22 +106,45 @@ class DeepSeekProvider:
                     continue
                 delta = chunk.choices[0].delta
                 if delta.content:
-                    for item in text_filter.feed(delta.content):
-                        yield LLMStreamEvent("tool_call", tool_call=item) if isinstance(item, ProviderToolCall) else LLMStreamEvent("message", content=item)
+                    if text_tool_error is None:
+                        try:
+                            for item in text_filter.feed(delta.content):
+                                if isinstance(item, ProviderToolCall):
+                                    pending_text_tools.append(item)
+                                else:
+                                    yield LLMStreamEvent("message", content=item)
+                        except TextToolCallError as exc:
+                            text_tool_error = exc
                 for fragment in delta.tool_calls or []:
                     item = pending_tools.setdefault(fragment.index, {"id": "", "name": "", "arguments": ""})
                     item["id"] += fragment.id or ""
                     if fragment.function:
                         item["name"] += fragment.function.name or ""
                         item["arguments"] += fragment.function.arguments or ""
-            for item in text_filter.finish():
-                yield LLMStreamEvent("tool_call", tool_call=item) if isinstance(item, ProviderToolCall) else LLMStreamEvent("message", content=item)
+            if text_tool_error is None:
+                try:
+                    for item in text_filter.finish():
+                        if isinstance(item, ProviderToolCall):
+                            pending_text_tools.append(item)
+                        else:
+                            yield LLMStreamEvent("message", content=item)
+                except TextToolCallError as exc:
+                    text_tool_error = exc
             for index in sorted(pending_tools):
                 item = pending_tools[index]
                 yield LLMStreamEvent(
                     "tool_call",
                     tool_call=ProviderToolCall(item["id"], item["name"], item["arguments"] or "{}"),
                 )
+            if not pending_tools:
+                if text_tool_error is not None:
+                    raise text_tool_error
+                for item in pending_text_tools:
+                    yield LLMStreamEvent("tool_call", tool_call=item)
+            logger.info(
+                "llm stream complete provider=%s requested_model=%s actual_model=%s",
+                self._provider_name, self._model, model,
+            )
             yield LLMStreamEvent("done", model=model, provider=self._provider_name)
         finally:
             response.close()

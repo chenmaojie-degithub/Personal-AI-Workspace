@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str | None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = "openrouter/free"
+    openrouter_fixed_model: str = "nvidia/nemotron-3-super-120b-a12b:free"
 
     # Legacy OpenAI-compatible chat settings. Kept so existing .env files work.
     openai_api_key: str | None = None
@@ -59,6 +60,20 @@ class Settings(BaseSettings):
     storage_dir: str = "./storage"
     chroma_persist_dir: str = "./chroma"
     chroma_collection: str = "rag_chunks"
+
+    # Agent execution budgets. Agent orchestration reads these values centrally.
+    agent_max_tool_steps: int = 4
+    agent_max_model_calls: int = 8
+    agent_timeout_seconds: int = 120
+    agent_token_budget: int = 16_000
+    agent_max_completion_tokens: int = 800
+    agent_tool_result_max_chars: int = 12_000
+    agent_repeat_limit: int = 2
+
+    # Upload limits are enforced while streaming bytes to temporary files.
+    document_max_bytes: int = 25 * 1024 * 1024
+    data_file_max_bytes: int = 10 * 1024 * 1024
+    upload_max_files: int = 20
 
 
 settings = Settings()

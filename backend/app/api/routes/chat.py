@@ -26,13 +26,14 @@ from uuid import uuid4
 from fastapi import APIRouter
 
 from app.core.config import settings
-from app.core.database import DEFAULT_WORKSPACE_ID, get_workspace, save_chat_turn, session_workspace_id
+from app.core.database import DEFAULT_WORKSPACE_ID, get_document_record, get_workspace, save_chat_turn, session_workspace_id
 from app.models.chat import ChartArtifact, ChatSettings, CitationSource, ChatMessage, ChatRequest, ChatResponse, ToolCallLog
 from app.providers.factory import create_llm_provider
+from app.providers.base import LLMUsage
 from app.providers.registry import resolve_model
-from app.rag.service import RAGService
+from app.rag.service import get_rag_service
 from app.services.data_analysis import list_analysis_files
-from app.tools.registry import execute_tool_call, get_enabled_tool_specs
+from app.tools.registry import ToolSpec, execute_tool_call, get_enabled_tool_specs
 from app.tools.web_search import web_citations
 
 # region 1. FastAPI 路由与模块依赖
@@ -41,6 +42,7 @@ from app.tools.web_search import web_citations
 # main.py 会把这个 router 注册到 FastAPI 应用中。
 router = APIRouter(tags=["chat"])
 logger = logging.getLogger(__name__)
+_RAG_EXTENSIONS = {".txt", ".md", ".markdown", ".pdf", ".docx"}
 
 # endregion
 
@@ -93,6 +95,43 @@ def _build_system_prompt(req: ChatRequest, enabled_tool_names: list[str]) -> str
 
     return "\n".join(lines).strip()
 
+
+def relevant_tool_specs(req: ChatRequest, specs: list[ToolSpec]) -> list[ToolSpec]:
+    """Only advertise enabled tools that the recent user request may need."""
+    recent = "\n".join(
+        item.content.lower()
+        for item in [message for message in req.messages if message.role == "user"][-2:]
+    )
+    keywords = {
+        "search_web": (
+            "search_web", "search", "web", "internet", "online", "latest", "current",
+            "today", "news", "website", "source", "搜索", "联网", "网页", "官网",
+            "最新", "当前", "今天", "实时", "新闻", "来源",
+        ),
+        "analyze_data": (
+            "analyze_data", ".csv", ".xlsx", "excel", "analyze", "analysis", "chart",
+            "plot", "average", "mean", "sum", "group", "sort", "dataset", "分析",
+            "数据", "图表", "绘图", "平均", "统计", "汇总", "排序", "表格",
+        ),
+        "generate_image": (
+            "generate_image", "generate an image", "create an image", "draw", "picture",
+            "生成图片", "生成图像", "画一张", "绘画",
+        ),
+        "search_knowledge": (
+            "search_knowledge", "document", "file", "pdf", "knowledge", "citation",
+            "文档", "文件", "知识库", "资料", "引用", "简历", "合同",
+        ),
+        "read_document": (
+            "read_document", "whole document", "entire document", "compare documents",
+            "全文", "整份", "完整文档", "对比文档", "多份文档", "长文档",
+        ),
+    }
+    return [
+        spec
+        for spec in specs
+        if any(term in recent for term in keywords.get(spec.name, (spec.name,)))
+    ]
+
 # endregion
 
 
@@ -111,7 +150,10 @@ def _get_session_files(session_id: str) -> list[str]:
     if not session_dir.exists():
         return []
 
-    return [f.name for f in session_dir.iterdir() if f.is_file() and not f.name.startswith(".")]
+    return [
+        f.name for f in session_dir.iterdir()
+        if f.is_file() and not f.name.startswith(".") and f.suffix.lower() in _RAG_EXTENSIONS
+    ]
 
 
 # 尝试从用户问题中匹配当前 Session 的文件名。
@@ -129,7 +171,10 @@ def _extract_filename_from_query(query: str, session_id: str, workspace_id: str 
     if workspace_id:
         workspace_dir = Path(settings.storage_dir).resolve() / "workspaces" / workspace_id
         if workspace_dir.is_dir():
-            session_files.extend(p.name for p in workspace_dir.iterdir() if p.is_file() and not p.name.startswith("."))
+            session_files.extend(
+                p.name for p in workspace_dir.iterdir()
+                if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in _RAG_EXTENSIONS
+            )
     if not session_files:
         return None
 
@@ -153,19 +198,38 @@ def _extract_filename_from_query(query: str, session_id: str, workspace_id: str 
 # 判断本次聊天是否需要 RAG。
 # 当前策略优先检查 Session 是否真的有上传文件；关键词只是兼容性的后备判断。
 def _should_use_rag(req: ChatRequest) -> bool:
-    """Use RAG if session has uploaded files."""
+    """Use RAG only when the request refers to uploaded knowledge."""
     session_id = req.session_id
     if not session_id:
         return False
 
+    last_user = next((m for m in reversed(req.messages) if m.role == "user"), None)
+    if not last_user:
+        return False
+    text = (last_user.content or "").lower()
+    triggers = (
+        "file", "files", "document", "pdf", "upload", "attached", "attachment",
+        "my notes", "this doc", ".txt", ".md", ".markdown", ".docx",
+        "文件", "文档", "知识库", "上传", "附件", "笔记", "资料",
+        "整份", "全文", "整篇", "总结", "概括", "评价", "审阅", "简历",
+    )
+    if not any(term in text for term in triggers):
+        return False
+
     if req.workspace_id:
         workspace_dir = Path(settings.storage_dir).resolve() / "workspaces" / req.workspace_id
-        if workspace_dir.is_dir() and any(p.is_file() and not p.name.startswith(".") for p in workspace_dir.iterdir()):
+        if workspace_dir.is_dir() and any(
+            p.is_file() and not p.name.startswith(".") and p.suffix.lower() in _RAG_EXTENSIONS
+            for p in workspace_dir.iterdir()
+        ):
             return True
         if req.workspace_id == DEFAULT_WORKSPACE_ID:
             root = Path(settings.storage_dir).resolve()
             if root.exists() and any(
-                p.is_dir() and p.name != "workspaces" and any(f.is_file() and not f.name.startswith(".") for f in p.iterdir())
+                p.is_dir() and p.name != "workspaces" and any(
+                    f.is_file() and not f.name.startswith(".") and f.suffix.lower() in _RAG_EXTENSIONS
+                    for f in p.iterdir()
+                )
                 for p in root.iterdir()
             ):
                 return True
@@ -177,17 +241,7 @@ def _should_use_rag(req: ChatRequest) -> bool:
         # Session has files, always use RAG
         return True
 
-    # Fallback to keyword-based detection
-    last_user = next((m for m in reversed(req.messages) if m.role == "user"), None)
-    if not last_user:
-        return False
-
-    t = (last_user.content or "").lower()
-    triggers = [
-        "file", "files", "document", "pdf", "upload",
-        "attached", "my notes", "these", "this doc"
-    ]
-    return any(k in t for k in triggers)
+    return False
 
 
 def resolve_workspace_request(req: ChatRequest) -> ChatRequest:
@@ -201,6 +255,11 @@ def resolve_workspace_request(req: ChatRequest) -> ChatRequest:
         owner = session_workspace_id(req.session_id)
         if owner and owner != req.workspace_id:
             raise ValueError("Session belongs to a different workspace")
+    if len(req.document_ids) != len(set(req.document_ids)):
+        raise ValueError("Duplicate document IDs are not allowed")
+    for document_id in req.document_ids:
+        if not get_document_record(document_id, req.workspace_id):
+            raise ValueError("Document does not belong to the selected workspace")
     settings = {**ChatSettings().model_dump(), **workspace["tool_settings"]}
     settings.update(req.settings.model_dump(include=req.settings.model_fields_set))
     # Workspace capability switches are authoritative even for direct API callers.
@@ -257,7 +316,7 @@ def orchestrate_chat(req: ChatRequest) -> ChatResponse:
 
     # 工具开关必须由后端执行：未启用的工具不会出现在发给模型的 tools 列表中，
     # 防止仅靠前端 UI 隐藏工具却仍然允许模型调用。
-    tool_specs = get_enabled_tool_specs(req.settings, req.workspace_id)
+    tool_specs = relevant_tool_specs(req, get_enabled_tool_specs(req.settings, req.workspace_id))
     if tool_specs and not resolve_model(req.model_id).supports_tools:
         return ChatResponse(
             session_id=session_id,
@@ -293,7 +352,7 @@ def orchestrate_chat(req: ChatRequest) -> ChatResponse:
     if _should_use_rag(req):
         # RAGService 封装了 Embedding Provider 和 ChromaDB。
         # 本文件只决定“何时检索”和“如何把检索结果交给模型”。
-        rag_service = RAGService()
+        rag_service = get_rag_service()
         last_user = next((m for m in reversed(req.messages) if m.role == "user"), None)
         query = last_user.content if last_user else ""
 
@@ -327,6 +386,8 @@ def orchestrate_chat(req: ChatRequest) -> ChatResponse:
                     filename=chunk.filename,
                     document_id=chunk.document_id,
                     chunk_index=chunk.chunk_index,
+                    page_number=chunk.metadata.get("page_number"),
+                    section=chunk.metadata.get("section"),
                     content_preview=" ".join(chunk.content.split())[:240],
                     distance=chunk.distance,
                 )
@@ -368,6 +429,7 @@ def orchestrate_chat(req: ChatRequest) -> ChatResponse:
 # region 6. LLM 调用、Tool Calling 与 Token Usage
 
     tool_logs: list[ToolCallLog] = []
+    one_shot_results: dict[str, object] = {}
 
     # 业务层只调用统一 Provider 接口。
     # LLMResponse 已经把厂商响应转换成 content、tool_calls、model、provider 和 usage。
@@ -421,8 +483,11 @@ def orchestrate_chat(req: ChatRequest) -> ChatResponse:
                 parsed_args = json.loads(args_json) if args_json else {}
                 log.input = parsed_args if isinstance(parsed_args, dict) else None
 
-                result = execute_tool_call(tool_map=tool_map, name=name, arguments_json=args_json)
-                if name == "search_web" and isinstance(result, dict):
+                reused = name != "analyze_data" and name in one_shot_results
+                result = one_shot_results[name] if reused else execute_tool_call(tool_map=tool_map, name=name, arguments_json=args_json)
+                if name != "analyze_data" and not reused:
+                    one_shot_results[name] = result
+                if name == "search_web" and isinstance(result, dict) and not reused:
                     sources.extend(web_citations(result))
                 if name == "analyze_data" and isinstance(result, dict) and result.get("type") == "chart":
                     charts.append(ChartArtifact(url=result["url"], title=result["title"]))
@@ -462,6 +527,11 @@ def orchestrate_chat(req: ChatRequest) -> ChatResponse:
                     }
                 )
             tool_logs.append(log)
+
+        one_shot_tools = {tc.name for tc in llm_response.tool_calls if tc.name != "analyze_data"}
+        if one_shot_tools:
+            tool_specs = [spec for spec in tool_specs if spec.name not in one_shot_tools]
+            tools = [spec.as_openai_tool() for spec in tool_specs]
 
         # 工具执行后再次调用 LLM，让模型读取结果并决定回答或继续分析。
         try:
@@ -525,11 +595,58 @@ def orchestrate_chat(req: ChatRequest) -> ChatResponse:
 # region 7. FastAPI /chat 入口
 
 
+def orchestrate_request(req: ChatRequest) -> ChatResponse:
+    """Route complex goals through the shared Agent engine and adapt its events."""
+    # Local import avoids a module cycle: the Agent reuses helpers from this module.
+    from app.agents.orchestrator import run_agent, should_run_agent
+
+    if not should_run_agent(req):
+        return orchestrate_chat(req)
+
+    session_id = req.session_id or ""
+    content_parts: list[str] = []
+    tool_calls: list[ToolCallLog] = []
+    sources: list[CitationSource] = []
+    charts: list[ChartArtifact] = []
+    usage: LLMUsage | None = None
+    error: str | None = None
+
+    for event, data in run_agent(req):
+        payload = data if isinstance(data, dict) else {}
+        if event in {"agent_run", "done"}:
+            session_id = str(payload.get("session_id") or session_id)
+        elif event == "message":
+            content_parts.append(str(payload.get("content") or ""))
+        elif event == "tool_call":
+            tool_calls.append(ToolCallLog.model_validate(payload))
+        elif event == "source":
+            sources.append(CitationSource.model_validate(payload))
+        elif event == "chart":
+            charts.append(ChartArtifact.model_validate(payload))
+        elif event == "usage" and payload:
+            usage = LLMUsage(**payload)
+        elif event == "error":
+            error = str(payload.get("message") or "Agent failed")
+        elif event == "agent_status" and payload.get("status") in {"failed", "cancelled"}:
+            error = str(payload.get("reason") or payload["status"])
+
+    content = "".join(content_parts).strip()
+    return ChatResponse(
+        session_id=session_id,
+        assistant_message=ChatMessage(role="assistant", content=content) if content else None,
+        tool_calls=tool_calls,
+        sources=sources,
+        charts=charts,
+        usage=usage,
+        error=error,
+    )
+
+
 # POST /chat 的 HTTP 入口。
 # FastAPI 会先把 JSON 请求校验并转换为 ChatRequest，再将 ChatResponse 序列化为 JSON。
 # 当前函数是同步 def，FastAPI 会在工作线程中执行，避免阻塞主事件循环。
 @router.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest) -> ChatResponse:
-    return orchestrate_chat(req)
+    return orchestrate_request(req)
 
 # endregion

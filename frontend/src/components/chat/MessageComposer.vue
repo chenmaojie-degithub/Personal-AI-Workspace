@@ -42,11 +42,12 @@ defineExpose({ setText })
     <textarea ref="textarea" v-model="text" rows="1" :disabled="disabled" placeholder="输入消息..."
       class="block min-h-20 max-h-[200px] w-full resize-none overflow-y-auto bg-transparent px-5 pb-2 pt-[18px] text-[15px] leading-[1.6] text-[#f3f4f6] outline-none placeholder:text-white/30 disabled:cursor-not-allowed disabled:opacity-60"
       aria-label="输入你的消息" @input="resize" @keydown.enter.exact="onEnter" />
-    <div class="flex min-w-0 items-center justify-between gap-2 px-3 pb-3">
+    <div class="flex min-w-0 items-center gap-2 px-3 pb-3">
       <div class="flex min-w-0 items-center gap-1 text-xs text-white/45">
         <slot name="prepend" />
         <slot name="actions" />
       </div>
+      <div class="flex min-w-0 flex-1 justify-center"><slot name="center" /></div>
       <div class="flex shrink-0 items-center gap-1">
         <slot name="before-send" />
       <button v-if="streaming" type="button" class="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white text-[#111318] transition-colors hover:bg-white/85"
