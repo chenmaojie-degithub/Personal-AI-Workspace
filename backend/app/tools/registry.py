@@ -178,7 +178,10 @@ def execute_tool_call(tool_map: dict[str, ToolSpec], name: str, arguments_json: 
         raise ValueError("Tool arguments must be a JSON object")
     _validate_arguments(tool_map[name].parameters_schema, args)
 
-    return tool_map[name].handler(**args)
+    result = tool_map[name].handler(**args)
+    if isinstance(result, dict) and result.get("error"):
+        raise RuntimeError(str(result["error"]))
+    return result
 
 
 def _validate_arguments(schema: dict[str, Any], args: dict[str, Any]) -> None:

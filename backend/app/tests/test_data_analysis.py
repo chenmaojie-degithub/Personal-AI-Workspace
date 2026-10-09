@@ -53,6 +53,8 @@ class DataAnalysisTests(unittest.TestCase):
             execute_tool_call({tool.name: tool}, tool.name, '{"file_id":"students.csv","operation":"mean","column":"score","code":"print(1)"}')
         with self.assertRaisesRegex(ValueError, "invalid type"):
             execute_tool_call({tool.name: tool}, tool.name, '{"file_id":"students.csv","operation":"top_n","column":"score","limit":"10"}')
+        with self.assertRaisesRegex(RuntimeError, "File not found"):
+            execute_tool_call({tool.name: tool}, tool.name, '{"file_id":"missing.csv","operation":"shape"}')
 
     def test_csv_and_xlsx_load(self) -> None:
         for name in ("students.csv", "students.xlsx"):
