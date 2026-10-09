@@ -99,6 +99,13 @@ class OpenRouterTests(unittest.TestCase):
             fixed = next(item for item in TestClient(app).get("/models").json()["models"] if item["model_id"] == "openrouter/fixed")
         self.assertFalse(fixed["supports_tools"])
 
+    def test_unknown_legacy_openrouter_model_is_not_allowed_agent_tools(self) -> None:
+        config = fake_settings()
+        config.openrouter_model = "vendor/unknown-model"
+        with patch("app.providers.registry.settings", config):
+            legacy = next(item for item in TestClient(app).get("/models").json()["models"] if item["model_id"] == "openrouter/free")
+        self.assertFalse(legacy["supports_tools"])
+
     @patch("app.providers.deepseek.OpenAI")
     def test_openrouter_maps_real_response_usage_and_provider(self, openai) -> None:
         openai.return_value.chat.completions.create.return_value = SimpleNamespace(
