@@ -5,6 +5,11 @@ from dataclasses import dataclass
 from app.core.config import settings
 
 
+VERIFIED_OPENROUTER_TOOL_MODELS = frozenset({
+    "nvidia/nemotron-3-super-120b-a12b:free",
+})
+
+
 @dataclass(frozen=True)
 class ModelEntry:
     id: str
@@ -29,6 +34,13 @@ def models() -> list[ModelEntry]:
             model=settings.openrouter_model,
             supports_tools=True,  # The free router filters destinations when tools are requested.
             available=bool(settings.openrouter_api_key),
+        ),
+        ModelEntry(
+            id="openrouter/fixed",
+            provider="openrouter",
+            model=settings.openrouter_fixed_model,
+            supports_tools=settings.openrouter_fixed_model in VERIFIED_OPENROUTER_TOOL_MODELS,
+            available=bool(settings.openrouter_api_key and settings.openrouter_fixed_model),
         ),
     ]
 

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Iterator
 
 from openai import OpenAI
 
 from app.providers.base import LLMResponse, LLMStreamEvent, LLMUsage, ProviderToolCall
 from app.providers.text_tool_calls import TextToolCallFilter
+
+
+logger = logging.getLogger(__name__)
 
 
 class DeepSeekProvider:
@@ -47,10 +51,15 @@ class DeepSeekProvider:
             if raw_usage is not None and all(value is not None for value in usage_values)
             else None
         )
+        actual_model = getattr(response, "model", None) or self._model
+        logger.info(
+            "llm response provider=%s requested_model=%s actual_model=%s",
+            self._provider_name, self._model, actual_model,
+        )
         return LLMResponse(
             content="".join(item for item in normalized if isinstance(item, str)),
             tool_calls=tool_calls or text_tool_calls,
-            model=getattr(response, "model", None) or self._model,
+            model=actual_model,
             provider=self._provider_name,
             usage=usage,
         )
@@ -106,6 +115,10 @@ class DeepSeekProvider:
                     "tool_call",
                     tool_call=ProviderToolCall(item["id"], item["name"], item["arguments"] or "{}"),
                 )
+            logger.info(
+                "llm stream complete provider=%s requested_model=%s actual_model=%s",
+                self._provider_name, self._model, model,
+            )
             yield LLMStreamEvent("done", model=model, provider=self._provider_name)
         finally:
             response.close()

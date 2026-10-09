@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str | None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = "openrouter/free"
+    openrouter_fixed_model: str = "nvidia/nemotron-3-super-120b-a12b:free"
 
     # Legacy OpenAI-compatible chat settings. Kept so existing .env files work.
     openai_api_key: str | None = None
