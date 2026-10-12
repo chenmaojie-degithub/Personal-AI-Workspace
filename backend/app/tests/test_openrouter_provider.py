@@ -55,7 +55,9 @@ class OpenRouterTests(unittest.TestCase):
             "app.api.routes.chat_stream._should_use_rag", return_value=True
         ), patch("app.api.routes.chat_stream.get_rag_service") as rag_factory, patch(
             "app.api.routes.chat_stream.save_chat_turn"
-        ), patch("app.services.web_search.DDGS") as ddgs:
+        ), patch("app.services.search_providers.DDGS") as ddgs, patch(
+            "app.services.search_providers.settings.search_provider", "ddgs"
+        ):
             ddgs.return_value.text.return_value = ddgs_results
             rag_factory.return_value.retrieve.return_value = [RAGChunk("Local notes", "README.md", "doc-1", 3, 0.1)]
             events = [(line.split("\n")[0].removeprefix("event: "), json.loads(line.split("data: ", 1)[1])) for line in _events(req)]

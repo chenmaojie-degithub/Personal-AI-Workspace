@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,6 +30,10 @@ class Settings(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = "openrouter/free"
     openrouter_fixed_model: str = "nvidia/nemotron-3-super-120b-a12b:free"
+
+    # Web Search is independent of the LLM provider. No implicit fallback.
+    search_provider: str = "exa"
+    exa_api_key: SecretStr | None = None
 
     # Legacy OpenAI-compatible chat settings. Kept so existing .env files work.
     openai_api_key: str | None = None

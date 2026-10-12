@@ -4,10 +4,8 @@ import logging
 from dataclasses import asdict, dataclass
 from urllib.parse import urlparse
 
-from ddgs import DDGS
-from ddgs.exceptions import DDGSException, RatelimitException, TimeoutException
-
 from app.core.config import settings
+from app.services.search_providers import WebSearchError, get_search_provider
 
 logger = logging.getLogger(__name__)
 
@@ -20,15 +18,11 @@ class WebSearchResult:
     published_at: str | None = None
 
 
-class WebSearchError(Exception):
-    pass
-
-
 def search_web(query: str) -> list[dict]:
     query = query.strip()
     if not query or len(query) > 600 or len(query.split()) > 75:
         raise WebSearchError("Web Search query must contain 1–600 characters and at most 75 words.")
-    items = _search_with_fallback(query)
+    items = get_search_provider().search(query)
 
     if not isinstance(items, list):
         raise WebSearchError("Web Search returned an invalid response.")
@@ -38,44 +32,27 @@ def search_web(query: str) -> list[dict]:
     for item in items:
         if not isinstance(item, dict):
             continue
-        url = item.get("href") or item.get("url")
+        url = item.get("url")
         if not isinstance(url, str) or not _safe_web_url(url) or url in seen:
             continue
         seen.add(url)
         title = item.get("title") or urlparse(url).netloc
-        snippet = item.get("body") or item.get("snippet") or ""
-        results.append(asdict(WebSearchResult(str(title)[:200], url, str(snippet).strip()[:900])))
+        snippet = item.get("snippet") or ""
+        published_at = item.get("published_at")
+        published_at = published_at if isinstance(published_at, str) else None
+        results.append(asdict(WebSearchResult(str(title)[:200], url, str(snippet).strip()[:900], published_at)))
         if len(results) == 5:
             break
     if settings.app_env == "dev":
-        logger.info("ddgs results=%d", len(results))
+        logger.info("web_search provider=%s results=%d", settings.search_provider, len(results))
     return results
 
 
-def _search_with_fallback(query: str) -> list[dict]:
-    # Retry once with explicit general-web engines; auto also queries encyclopedias.
-    failures: list[Exception] = []
-    for attempt, options in enumerate(({}, {"backend": "duckduckgo,yahoo", "region": "wt-wt"}), 1):
-        try:
-            items = DDGS(timeout=8).text(query, max_results=5, **options)
-            if not isinstance(items, list):
-                raise WebSearchError("Web Search returned an invalid response.")
-            if items:
-                return items
-        except (DDGSException, OSError) as exc:
-            failures.append(exc)
-            # Do not log raw exception text: proxy credentials may appear in URLs.
-            reason = "no_results" if "no results found" in str(exc).lower() else type(exc).__name__
-            logger.warning("ddgs attempt=%d backend=%s failure=%s", attempt, options.get("backend", "auto"), reason)
-    if not failures or all("no results found" in str(exc).lower() for exc in failures):
-        return []
-    if any(isinstance(exc, RatelimitException) for exc in failures):
-        raise WebSearchError("Web Search rate limit reached or the search source refused the request.")
-    if all(isinstance(exc, TimeoutException) for exc in failures):
-        raise WebSearchError("Web Search timed out after two search attempts.")
-    raise WebSearchError("Web Search is temporarily unavailable after two attempts; search sources may be blocked or unreachable.")
-
-
 def _safe_web_url(url: str) -> bool:
-    parsed = urlparse(url)
-    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+    if any(char.isspace() or ord(char) < 32 for char in url):
+        return False
+    try:
+        parsed = urlparse(url)
+        return parsed.scheme in ("http", "https") and bool(parsed.hostname) and not parsed.username and not parsed.password
+    except ValueError:
+        return False

@@ -248,6 +248,28 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertTrue(any(event == "message" and data["content"] == "Explain failure" for event, data in events))
         self.assertFalse(any(event == "error" for event, _ in events))
 
+    def test_agent_uses_exa_via_existing_search_tool_and_persists_answer(self) -> None:
+        import httpx
+        from pydantic import SecretStr
+
+        call = ProviderToolCall("call-exa", "search_web", '{"query":"RAG technical documentation"}')
+        provider = Provider(response('{"steps":["Search docs","Answer"]}'), response("", (call,)), response("Verified answer"))
+        with patch("app.agents.orchestrator.create_llm_provider", return_value=provider), patch(
+            "app.agents.orchestrator.resolve_model"
+        ) as model, patch("app.services.search_providers.settings.search_provider", "exa"), patch(
+            "app.services.search_providers.settings.exa_api_key", SecretStr("test-only-key")
+        ), patch("app.services.search_providers.httpx.post", return_value=httpx.Response(200, json={
+            "results": [{"title": "Official docs", "url": "https://example.com/docs", "highlights": ["Evidence"]}],
+        })) as post:
+            model.return_value.supports_tools = True
+            events = list(run_agent(self.request("Research RAG on the web", web_search=True)))
+        post.assert_called_once()
+        self.assertEqual([data["url"] for kind, data in events if kind == "source"], ["https://example.com/docs"])
+        self.assertEqual([data["type"] for kind, data in events if kind == "source"], ["web"])
+        run_id = next(data["run_id"] for kind, data in events if kind == "agent_run")
+        self.assertEqual(database.get_agent_run(run_id)["status"], "completed")
+        self.assertEqual(database.list_messages("agent-session")[-1]["content"], "Verified answer")
+
     def test_invalid_text_tool_call_gets_one_controlled_repair(self) -> None:
         call = ProviderToolCall("call-1", "search_web", '{"query":"official release"}')
 
