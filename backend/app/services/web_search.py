@@ -28,14 +28,7 @@ def search_web(query: str) -> list[dict]:
     query = query.strip()
     if not query or len(query) > 600 or len(query.split()) > 75:
         raise WebSearchError("Web Search query must contain 1–600 characters and at most 75 words.")
-    try:
-        items = DDGS().text(query, max_results=5)
-    except TimeoutException as exc:
-        raise WebSearchError("Web Search timed out.") from exc
-    except RatelimitException as exc:
-        raise WebSearchError("Web Search rate limit reached or the search source refused the request.") from exc
-    except (DDGSException, OSError) as exc:
-        raise WebSearchError("Web Search is temporarily unavailable.") from exc
+    items = _search_with_fallback(query)
 
     if not isinstance(items, list):
         raise WebSearchError("Web Search returned an invalid response.")
@@ -57,6 +50,30 @@ def search_web(query: str) -> list[dict]:
     if settings.app_env == "dev":
         logger.info("ddgs results=%d", len(results))
     return results
+
+
+def _search_with_fallback(query: str) -> list[dict]:
+    # Retry once with explicit general-web engines; auto also queries encyclopedias.
+    failures: list[Exception] = []
+    for attempt, options in enumerate(({}, {"backend": "duckduckgo,yahoo", "region": "wt-wt"}), 1):
+        try:
+            items = DDGS(timeout=8).text(query, max_results=5, **options)
+            if not isinstance(items, list):
+                raise WebSearchError("Web Search returned an invalid response.")
+            if items:
+                return items
+        except (DDGSException, OSError) as exc:
+            failures.append(exc)
+            # Do not log raw exception text: proxy credentials may appear in URLs.
+            reason = "no_results" if "no results found" in str(exc).lower() else type(exc).__name__
+            logger.warning("ddgs attempt=%d backend=%s failure=%s", attempt, options.get("backend", "auto"), reason)
+    if not failures or all("no results found" in str(exc).lower() for exc in failures):
+        return []
+    if any(isinstance(exc, RatelimitException) for exc in failures):
+        raise WebSearchError("Web Search rate limit reached or the search source refused the request.")
+    if all(isinstance(exc, TimeoutException) for exc in failures):
+        raise WebSearchError("Web Search timed out after two search attempts.")
+    raise WebSearchError("Web Search is temporarily unavailable after two attempts; search sources may be blocked or unreachable.")
 
 
 def _safe_web_url(url: str) -> bool:
