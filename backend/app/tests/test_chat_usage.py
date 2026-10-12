@@ -80,14 +80,14 @@ class ChatUsageTests(unittest.TestCase):
         self.assertEqual(result.sources[0].url, "https://example.com/page")
         self.assertEqual(result.sources[0].type, "web")
         self.assertIsNotNone(provider.tool_args[0])
-        self.assertIsNotNone(provider.tool_args[1])
+        self.assertIsNone(provider.tool_args[1])
 
     def test_rag_chat_usage(self) -> None:
         provider = SequenceProvider(response("from document", 40, 8))
         with patch("app.api.routes.chat.create_llm_provider", return_value=provider), patch(
             "app.api.routes.chat._should_use_rag", return_value=True
-        ), patch("app.api.routes.chat.RAGService") as rag_service:
-            rag_service.return_value.retrieve.return_value = [
+        ), patch("app.api.routes.chat.get_rag_service") as rag_factory:
+            rag_factory.return_value.retrieve.return_value = [
                 RAGChunk("document text", "note.txt", "doc-1", 3, 0.2),
                 RAGChunk("more text", "note.txt", "doc-1", 4, 0.3),
             ]
@@ -106,11 +106,11 @@ class ChatUsageTests(unittest.TestCase):
         provider = SequenceProvider(response("", tool_calls=(call,)), response("answer"))
         with patch("app.api.routes.chat.create_llm_provider", return_value=provider), patch(
             "app.api.routes.chat._should_use_rag", return_value=True
-        ), patch("app.api.routes.chat.RAGService") as rag, patch(
+        ), patch("app.api.routes.chat.get_rag_service") as rag_factory, patch(
             "app.tools.web_search.search_web", return_value=[{"title": "Example", "url": "https://example.com/page", "snippet": "Web text"}]
         ):
-            rag.return_value.retrieve.return_value = [RAGChunk("Local text", "note.txt", "doc-1", 0, 0.1)]
-            result = orchestrate_chat(request("question", web_search=True))
+            rag_factory.return_value.retrieve.return_value = [RAGChunk("Local text", "note.txt", "doc-1", 0, 0.1)]
+            result = orchestrate_chat(request("search the web and check the uploaded document", web_search=True))
         self.assertEqual([source.type for source in result.sources], ["knowledge", "web"])
         self.assertEqual(result.sources[1].url, "https://example.com/page")
 

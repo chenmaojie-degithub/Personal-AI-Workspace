@@ -13,15 +13,17 @@ from app.api.routes.chat import (
     _extract_filename_from_query,
     _needs_full_document,
     _should_use_rag,
+    relevant_tool_specs,
     resolve_workspace_request,
 )
+from app.agents.orchestrator import run_agent, should_run_agent
 from app.core.config import settings
 from app.core.database import save_chat_turn
 from app.models.chat import ChartArtifact, ChatRequest, CitationSource, ToolCallLog
 from app.providers.base import LLMStreamEvent, LLMUsage, ProviderToolCall
 from app.providers.factory import create_llm_provider
 from app.providers.registry import resolve_model
-from app.rag.service import RAGService
+from app.rag.service import get_rag_service
 from app.tools.registry import execute_tool_call, get_enabled_tool_specs
 from app.tools.web_search import web_citations
 
@@ -39,7 +41,7 @@ def _events(req: ChatRequest) -> Iterator[str]:
     try:
         req = resolve_workspace_request(req)
         provider = create_llm_provider(req.model_id)
-        specs = get_enabled_tool_specs(req.settings, req.workspace_id)
+        specs = relevant_tool_specs(req, get_enabled_tool_specs(req.settings, req.workspace_id))
         if specs and not resolve_model(req.model_id).supports_tools:
             raise RuntimeError(f"Model {req.model_id or 'default'} does not support Tool Calling; disable tool settings or choose another model.")
         tool_map = {item.name: item for item in specs}
@@ -62,7 +64,7 @@ def _events(req: ChatRequest) -> Iterator[str]:
             query = latest_user.content if latest_user else ""
             filename = _extract_filename_from_query(query, session_id, req.workspace_id) if query else None
             try:
-                rag = RAGService()
+                rag = get_rag_service()
                 chunks = (
                     rag.retrieve_all(session_id=session_id, filename=filename, **({"workspace_id": req.workspace_id} if req.workspace_id else {}))
                     if _needs_full_document(query)
@@ -78,6 +80,8 @@ def _events(req: ChatRequest) -> Iterator[str]:
                         filename=chunk.filename,
                         document_id=chunk.document_id,
                         chunk_index=chunk.chunk_index,
+                        page_number=chunk.metadata.get("page_number"),
+                        section=chunk.metadata.get("section"),
                         content_preview=" ".join(chunk.content.split())[:240],
                         distance=chunk.distance,
                     )
@@ -101,6 +105,7 @@ def _events(req: ChatRequest) -> Iterator[str]:
         usage: LLMUsage | None = None
         provider_name: str | None = None
         model: str | None = None
+        one_shot_results: dict[str, object] = {}
         for tool_round in range(5):
             round_parts: list[str] = []
             tool_calls: list[ProviderToolCall] = []
@@ -145,8 +150,11 @@ def _events(req: ChatRequest) -> Iterator[str]:
                 try:
                     parsed = json.loads(call.arguments or "{}")
                     log.input = parsed if isinstance(parsed, dict) else None
-                    result = execute_tool_call(tool_map, call.name, call.arguments)
-                    if call.name == "search_web" and isinstance(result, dict):
+                    reused = call.name != "analyze_data" and call.name in one_shot_results
+                    result = one_shot_results[call.name] if reused else execute_tool_call(tool_map, call.name, call.arguments)
+                    if call.name != "analyze_data" and not reused:
+                        one_shot_results[call.name] = result
+                    if call.name == "search_web" and isinstance(result, dict) and not reused:
                         sources.extend(web_citations(result))
                     if call.name == "analyze_data" and isinstance(result, dict) and result.get("type") == "chart":
                         charts.append(ChartArtifact(url=result["url"], title=result["title"]))
@@ -159,6 +167,11 @@ def _events(req: ChatRequest) -> Iterator[str]:
                     log.error = f"{type(exc).__name__}: {exc}"
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": json.dumps({"error": log.error, "tool": call.name})})
                 yield _sse("tool_call", log.model_dump())
+
+            one_shot_tools = {call.name for call in tool_calls if call.name != "analyze_data"}
+            if one_shot_tools:
+                specs = [spec for spec in specs if spec.name not in one_shot_tools]
+                tools = [spec.as_openai_tool() for spec in specs] or None
 
         for source in sources:
             yield _sse("source", source.model_dump())
@@ -182,10 +195,18 @@ def _events(req: ChatRequest) -> Iterator[str]:
         yield _sse("error", {"message": f"Streaming failed: {type(exc).__name__}: {exc}"})
 
 
+def _routed_events(req: ChatRequest) -> Iterator[str]:
+    if should_run_agent(req):
+        for event, data in run_agent(req):
+            yield _sse(event, data)
+        return
+    yield from _events(req)
+
+
 @router.post("/chat/stream")
 def chat_stream(req: ChatRequest) -> StreamingResponse:
     return StreamingResponse(
-        _events(req),
+        _routed_events(req),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

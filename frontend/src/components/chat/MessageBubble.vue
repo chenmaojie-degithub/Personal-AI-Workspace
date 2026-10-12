@@ -60,7 +60,7 @@ const renderedContent = computed(() =>
         <details v-else
           class="source-chip group max-w-full rounded-xl border border-white/10 bg-white/[0.035] text-white/65 open:w-full open:max-w-xl">
           <summary class="cursor-pointer truncate px-3 py-1.5 marker:text-white/30 hover:text-white/90">
-            📄 {{ source.filename }} · Chunk {{ source.chunk_index }}
+            📄 {{ source.filename }}<template v-if="source.page_number"> · Page {{ source.page_number }}</template><template v-else> · Chunk {{ source.chunk_index }}</template><template v-if="source.section"> · {{ source.section }}</template>
           </summary>
           <p class="border-t border-white/10 px-3 py-2 leading-relaxed whitespace-pre-wrap text-white/55">{{ source.content_preview }}</p>
         </details>

@@ -10,6 +10,12 @@ START = "<|tool_call_start|>"
 END = "<|tool_call_end|>"
 
 
+class TextToolCallError(ValueError):
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(f"Invalid text tool call: {code}")
+
+
 def _prefix_tail(text: str, marker: str) -> int:
     return next((size for size in range(min(len(text), len(marker) - 1), 0, -1) if text.endswith(marker[:size])), 0)
 
@@ -44,7 +50,7 @@ def _parse_call(body: str, tools: list[dict] | None) -> ProviderToolCall:
             if not set(arguments).issubset(properties) or not set(schema.get("required", [])).issubset(arguments):
                 raise ValueError
     except (SyntaxError, ValueError, KeyError, TypeError) as exc:
-        raise ValueError("Model returned an invalid text tool call") from exc
+        raise TextToolCallError("invalid_syntax_or_schema") from exc
     return ProviderToolCall(f"call_text_{uuid4().hex}", name, json.dumps(arguments))
 
 
@@ -74,7 +80,7 @@ class TextToolCallFilter:
                 self.call += self.pending[:-keep] if keep else self.pending
                 self.pending = self.pending[-keep:] if keep else ""
                 if len(self.call) > 2000:
-                    raise ValueError("Model returned an oversized text tool call")
+                    raise TextToolCallError("oversized")
             else:
                 start = self.pending.find(START)
                 if start >= 0:
@@ -93,7 +99,7 @@ class TextToolCallFilter:
 
     def finish(self) -> list[str | ProviderToolCall]:
         if self.in_call:
-            raise ValueError("Model returned an incomplete text tool call")
+            raise TextToolCallError("incomplete")
         remaining = self.pending
         self.pending = ""
         return [remaining] if remaining and not START.startswith(remaining) else []

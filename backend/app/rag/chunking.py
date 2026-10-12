@@ -162,6 +162,7 @@ def chunk_documents(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
     Returns list of chunk dicts with metadata preserved.
     """
     all_chunks: list[dict[str, Any]] = []
+    document_indexes: dict[str, int] = {}
 
     for doc in documents:
         content = doc.get("content", "")
@@ -170,10 +171,13 @@ def chunk_documents(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
         doc_chunks = chunk_text(content)
         # NOTE: don't shadow the chunk_text() function name (Python scoping rules)
-        for idx, chunk in enumerate(doc_chunks):
+        document_id = str(doc.get("document_id") or "")
+        for chunk in doc_chunks:
+            idx = document_indexes.get(document_id, 0)
+            document_indexes[document_id] = idx + 1
             chunk = {
                 "content": chunk,
-                "document_id": doc.get("document_id"),
+                "document_id": document_id,
                 "filename": doc.get("filename"),
                 "chunk_index": idx,
                 "metadata": doc.get("metadata", {}),

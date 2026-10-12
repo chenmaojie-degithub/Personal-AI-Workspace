@@ -53,6 +53,8 @@ class DataAnalysisTests(unittest.TestCase):
             execute_tool_call({tool.name: tool}, tool.name, '{"file_id":"students.csv","operation":"mean","column":"score","code":"print(1)"}')
         with self.assertRaisesRegex(ValueError, "invalid type"):
             execute_tool_call({tool.name: tool}, tool.name, '{"file_id":"students.csv","operation":"top_n","column":"score","limit":"10"}')
+        with self.assertRaisesRegex(RuntimeError, "File not found"):
+            execute_tool_call({tool.name: tool}, tool.name, '{"file_id":"missing.csv","operation":"shape"}')
 
     def test_csv_and_xlsx_load(self) -> None:
         for name in ("students.csv", "students.xlsx"):
@@ -133,7 +135,7 @@ class DataAnalysisTests(unittest.TestCase):
 
         req = ChatRequest(
             workspace_id=self.workspace,
-            messages=[ChatMessage(role="user", content="生成成绩图")],
+            messages=[ChatMessage(role="user", content="generate a score chart")],
             settings=ChatSettings(data_analysis=True),
         )
         with patch("app.api.routes.chat_stream.resolve_workspace_request", side_effect=lambda value: value), patch(

@@ -119,6 +119,29 @@ class DeepSeekProviderTests(unittest.TestCase):
         )
 
     @patch("app.providers.deepseek.OpenAI")
+    def test_native_tool_call_wins_over_invalid_text_fallback(self, openai) -> None:
+        tool_call = SimpleNamespace(
+            id="call-native",
+            function=SimpleNamespace(name="search_web", arguments='{"query":"official"}'),
+        )
+        openai.return_value.chat.completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(
+                content="<|tool_call_start|>[unknown_tool(value='bad')]<|tool_call_end|>",
+                tool_calls=[tool_call],
+            ))],
+            model="native-tool-model", usage=None,
+        )
+
+        result = DeepSeekProvider("test-key", "https://example.com", "native-tool-model").complete(
+            [{"role": "user", "content": "search"}],
+            [{"type": "function", "function": {"name": "search_web"}}],
+        )
+
+        self.assertEqual(result.content, "")
+        self.assertEqual(result.tool_calls, (result.tool_calls[0],))
+        self.assertEqual(result.tool_calls[0].id, "call-native")
+
+    @patch("app.providers.deepseek.OpenAI")
     def test_missing_usage_returns_none_without_estimating(self, openai) -> None:
         openai.return_value.chat.completions.create.return_value = SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="ok", tool_calls=None))],
@@ -129,6 +152,29 @@ class DeepSeekProviderTests(unittest.TestCase):
         provider = DeepSeekProvider("test-key", "https://api.deepseek.com", "deepseek-flash")
 
         self.assertIsNone(provider.complete([{"role": "user", "content": "test"}]).usage)
+
+    @patch("app.providers.deepseek.OpenAI")
+    def test_completion_limit_is_forwarded_to_provider(self, openai) -> None:
+        openai.return_value.chat.completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok", tool_calls=None))],
+            model="deepseek-flash", usage=None,
+        )
+        DeepSeekProvider("test-key", "https://api.deepseek.com", "deepseek-flash").complete(
+            [{"role": "user", "content": "test"}], max_tokens=321,
+        )
+        self.assertEqual(openai.return_value.chat.completions.create.call_args.kwargs["max_tokens"], 321)
+
+    @patch("app.providers.deepseek.OpenAI")
+    def test_stream_limit_is_forwarded_to_provider(self, openai) -> None:
+        class FakeStream(list):
+            def close(self):
+                pass
+
+        openai.return_value.chat.completions.create.return_value = FakeStream([])
+        list(DeepSeekProvider("test-key", "https://example.com", "model").stream(
+            [{"role": "user", "content": "test"}], max_tokens=222,
+        ))
+        self.assertEqual(openai.return_value.chat.completions.create.call_args.kwargs["max_tokens"], 222)
 
 
 if __name__ == "__main__":
