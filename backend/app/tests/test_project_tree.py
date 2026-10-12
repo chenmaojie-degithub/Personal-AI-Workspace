@@ -76,6 +76,22 @@ class ProjectTreeTests(unittest.TestCase):
         tree = self.client.get("/projects/tree", params={"workspace_id": self.workspace["id"]}).json()
         self.assertIsNone(next(item for item in tree["folders"] if item["id"] == parent["id"])["parent_id"])
 
+    def test_new_chat_is_first_and_existing_manual_order_is_preserved(self) -> None:
+        folder = self.add_folder("Folder")
+        self.move("session", "one", folder["id"])
+        database.save_chat_turn("new", "Newest", "Answer", None, None, None, self.workspace["id"])
+        # A second turn in an existing chat must not undo the user's manual ordering.
+        database.save_chat_turn("two", "Follow-up", "Answer", None, None, None, self.workspace["id"])
+        tree = self.client.get("/projects/tree", params={"workspace_id": self.workspace["id"]}).json()
+        root = [("folder", item["id"], item["position"]) for item in tree["folders"] if item["parent_id"] is None]
+        root += [("session", item["session_id"], item["position"]) for item in tree["sessions"] if item["folder_id"] is None]
+        self.assertEqual(
+            [(kind, identifier) for kind, identifier, _ in sorted(root, key=lambda item: item[2])],
+            [("session", "new"), ("folder", folder["id"]), ("session", "two")],
+        )
+        self.assertEqual(next(item for item in tree["sessions"] if item["session_id"] == "one")["folder_id"], folder["id"])
+        self.assertEqual(len(database.list_messages("new", self.workspace["id"])), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
