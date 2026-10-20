@@ -1008,7 +1008,7 @@ RAGService 使用配置键驱动的 `lru_cache(maxsize=8)` 复用较重客户端
 
 ### 当前技术与代码位置
 
-现有结构化 Run/Step、部分日志、Usage 和状态事件是基础；验收脚本测过首段时间与总耗时。当前没有完整接入 OpenTelemetry，也没有可据此宣称已存在的生产仪表盘或全链路分布式追踪平台。
+现有 Run/Step 现在附带 Observability V1 指标：单调时钟总耗时、首段可见文本、模型尝试次数/Usage、工具耗时和失败阶段，通过 SSE 与原详情面板展示。实现见 `agents/observability.py` 与[专项说明](agent-observability-v1.md)。仍未接入 OpenTelemetry，也不是生产监控仪表盘或分布式追踪平台。
 
 ### 解决什么问题
 
@@ -1441,6 +1441,7 @@ pytest、TestClient、网络隔离 fixture 和回放脚本覆盖后端；vue-tsc
 | API 组装、CORS、静态图表 | [main.py](../backend/app/main.py) |
 | 普通聊天与请求解析 | [chat.py](../backend/app/api/routes/chat.py) |
 | HTTP SSE 与普通流式工具循环 | [chat_stream.py](../backend/app/api/routes/chat_stream.py) |
+| Agent 可观测性与指标定义 | [observability.py](../backend/app/agents/observability.py)、[V1 说明](agent-observability-v1.md) |
 | Agent 路由、规划、执行、预算、取消 | [orchestrator.py](../backend/app/agents/orchestrator.py) |
 | 模型协议、工厂、模型能力 | [providers/base.py](../backend/app/providers/base.py)、[factory.py](../backend/app/providers/factory.py)、[registry.py](../backend/app/providers/registry.py) |
 | 原生兼容 Provider 与文本工具解析 | [deepseek.py](../backend/app/providers/deepseek.py)、[openrouter.py](../backend/app/providers/openrouter.py)、[text_tool_calls.py](../backend/app/providers/text_tool_calls.py) |

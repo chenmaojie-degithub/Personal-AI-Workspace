@@ -50,6 +50,24 @@ export type AgentStep = {
   status: string
   output_preview?: string | null
   error?: string | null
+  duration_ms?: number | null
+}
+
+export type AgentMetrics = {
+  duration_ms: number
+  ttft_ms: number | null
+  model_call_count: number
+  model_duration_ms: number
+  tool_duration_ms: number
+  usage: LLMUsage | null
+  cost_usd: number | null
+  budget_tokens: number
+  budget_tokens_estimated: boolean
+  failure_stage: string | null
+  failure_type: string | null
+  finished: boolean
+  tools: Array<{ step_index: number; name: string; status: string; duration_ms: number | null; error_type: string | null }>
+  model_calls: Array<{ index: number; stage: string; status: string; duration_ms: number | null; error_type: string | null }>
 }
 
 export type AgentRun = {
@@ -59,6 +77,7 @@ export type AgentRun = {
   plan: Array<{ index: number; title: string; status: string }>
   steps: AgentStep[]
   error?: string | null
+  metrics?: AgentMetrics | null
 }
 
 export type LLMUsage = {
@@ -344,6 +363,9 @@ function createChat() {
         else if (event === 'agent_plan' && agentRun.value) {
           agentRun.value.plan = data.steps as AgentRun['plan']
           agentRun.value.status = 'running'
+        }
+        else if (event === 'agent_metrics' && agentRun.value && data.run_id === agentRun.value.id) {
+          agentRun.value.metrics = data.metrics as AgentMetrics
         }
         else if (event === 'agent_step' && agentRun.value) {
           const step: AgentStep = {

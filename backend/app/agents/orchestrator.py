@@ -8,6 +8,7 @@ from threading import Event, Lock
 from typing import Any
 from uuid import uuid4
 
+from app.agents.observability import RunObservation
 from app.api.routes.chat import _build_system_prompt, relevant_tool_specs, resolve_workspace_request
 from app.core.config import settings
 from app.core.database import (
@@ -206,6 +207,12 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
     usage_complete = True
     budget_tokens = 0
     model_calls = 0
+    observation = RunObservation(started)
+
+    def metrics_event(final: bool = False) -> AgentEvent:
+        metrics = observation.snapshot(budget_tokens, final=final)
+        update_agent_run(run_id, metrics=metrics)
+        return "agent_metrics", {"run_id": run_id, "metrics": metrics}
     provider_name: str | None = None
     model_name: str | None = None
     content = ""
@@ -216,10 +223,12 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
     charts: list[ChartArtifact] = []
 
     create_agent_run(run_id, session_id, workspace_id, goal)
+    initial_metrics_event = metrics_event()
     with _cancel_lock:
         _cancel_events[run_id] = Event()
     try:
         yield "agent_run", {"run_id": run_id, "session_id": session_id, "goal": goal, "status": "planning"}
+        yield initial_metrics_event
         req = resolve_workspace_request(req)
         provider = create_llm_provider(req.model_id)
         specs = relevant_tool_specs(
@@ -243,8 +252,8 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
             },
             *({"role": item.role, "content": item.content} for item in req.messages),
         ]
-        plan_response = provider.complete(
-            planner_messages, tools=None,
+        plan_response = observation.complete(
+            provider, planner_messages, stage="planning", tools=None,
             max_tokens=max(1, _completion_budget(planner_messages, None, budget_tokens)),
         )
         _raise_if_cancelled(run_id)
@@ -257,6 +266,8 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
         plan = _parse_plan(plan_response.content, goal, settings.agent_max_tool_steps)
         update_agent_run(run_id, status="running", plan=plan, provider=provider_name, model=model_name, usage=usage)
         yield "agent_plan", {"run_id": run_id, "goal": goal, "steps": [dict(item) for item in plan]}
+
+        yield metrics_event()
 
         messages: list[dict[str, Any]] = [
             {
@@ -300,7 +311,7 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                 stop_reason = "token_budget"
                 break
             try:
-                response = provider.complete(call_messages, tools=tools, max_tokens=max_tokens)
+                response = observation.complete(provider, call_messages, stage="replanning" if step_index else "action_selection", tools=tools, max_tokens=max_tokens)
             except TextToolCallError as exc:
                 model_calls += 1
                 budget_tokens += _failed_call_token_estimate(call_messages, tools, max_tokens)
@@ -332,8 +343,8 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                     "run_id": run_id, "status": "repairing_tool_call", "reason": exc.code,
                 }
                 try:
-                    response = provider.complete(
-                        repair_messages, tools=tools, max_tokens=repair_max_tokens,
+                    response = observation.complete(
+                        provider, repair_messages, stage="tool_call_repair", tools=tools, max_tokens=repair_max_tokens,
                     )
                 except TextToolCallError as repair_exc:
                     logger.warning(
@@ -399,16 +410,19 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                     final_usage: LLMUsage | None = None
                     final_parts: list[str] = []
                     citation_stream = CitationStream(citations)
-                    stream = provider.stream(final_messages, tools=None, max_tokens=final_max_tokens)
+                    stream = observation.stream(provider, final_messages, stage="final_answer", tools=None, max_tokens=final_max_tokens)
                     model_calls += 1
                     try:
                         for event in stream:
                             _raise_if_cancelled(run_id)
                             if event.type == "message":
+                                observation.stage = "citation_validation"
                                 part = citation_stream.feed(event.content)
+                                observation.stage = "final_answer"
                                 final_parts.append(part)
                                 final_streamed = True
                                 if part:
+                                    observation.visible_text(part)
                                     yield "message", {"content": part}
                             elif event.type == "usage":
                                 final_usage = event.usage
@@ -420,9 +434,12 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                         close = getattr(stream, "close", None)
                         if close:
                             close()
+                    observation.stage = "citation_validation"
                     tail = citation_stream.finish()
+                    observation.stage = "final_answer"
                     if tail:
                         final_parts.append(tail)
+                        observation.visible_text(tail)
                         yield "message", {"content": tail}
                     content = "".join(final_parts)
                     usage = _usage_sum(usage, final_usage) if usage_complete else None
@@ -484,10 +501,11 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
 
                 log = ToolCallLog(name=call.name, input=input_data)
                 try:
-                    if signatures[signature] > settings.agent_repeat_limit:
-                        raise RuntimeError("Repeated tool call limit reached")
-                    result = execute_tool_call(tool_map, call.name, call.arguments)
-                    _raise_if_cancelled(run_id)
+                    with observation.tool(step_index, call.name):
+                        if signatures[signature] > settings.agent_repeat_limit:
+                            raise RuntimeError("Repeated tool call limit reached")
+                        result = execute_tool_call(tool_map, call.name, call.arguments)
+                        _raise_if_cancelled(run_id)
                     tool_content = _tool_content(result, settings.agent_tool_result_max_chars)
                     log.output_preview = tool_content[:2000]
                     if call.name == "search_web" and isinstance(result, dict):
@@ -532,6 +550,7 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                         "run_id": run_id, "index": step_index, "tool": call.name,
                         "status": "failed", "error": log.error,
                     }
+                yield metrics_event()
                 yield "tool_call", log.model_dump()
                 if time.monotonic() - started >= settings.agent_timeout_seconds:
                     stop_reason = "timeout"
@@ -574,16 +593,19 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                     final_usage = None
                     final_parts = []
                     citation_stream = CitationStream(citations)
-                    stream = provider.stream(summary_messages, tools=None, max_tokens=max_tokens)
+                    stream = observation.stream(provider, summary_messages, stage="partial_answer", tools=None, max_tokens=max_tokens)
                     model_calls += 1
                     try:
                         for event in stream:
                             _raise_if_cancelled(run_id)
                             if event.type == "message":
+                                observation.stage = "citation_validation"
                                 part = citation_stream.feed(event.content)
+                                observation.stage = "partial_answer"
                                 final_parts.append(part)
                                 final_streamed = True
                                 if part:
+                                    observation.visible_text(part)
                                     yield "message", {"content": part}
                             elif event.type == "usage":
                                 final_usage = event.usage
@@ -595,9 +617,12 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                         close = getattr(stream, "close", None)
                         if close:
                             close()
+                    observation.stage = "citation_validation"
                     tail = citation_stream.finish()
+                    observation.stage = "partial_answer"
                     if tail:
                         final_parts.append(tail)
+                        observation.visible_text(tail)
                         yield "message", {"content": tail}
                     content = "".join(final_parts)
                     usage = _usage_sum(usage, final_usage) if usage_complete else None
@@ -608,7 +633,7 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                     else:
                         budget_tokens += final_usage.total_tokens
                 else:
-                    response = provider.complete(summary_messages, tools=None, max_tokens=max_tokens)
+                    response = observation.complete(provider, summary_messages, stage="partial_answer", tools=None, max_tokens=max_tokens)
                 if response is None:
                     if not content:
                         content = f"Agent stopped because the {stop_reason} limit was reached before a final answer was available."
@@ -626,7 +651,12 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                 content = f"Agent stopped because the {stop_reason} limit was reached before a final answer was available."
 
         if not final_streamed:
+            observation.stage = "citation_validation"
             content = citations.render(content)
+        # A rejected/failed model attempt can have unreported usage even after a successful repair.
+        measured_usage = observation.snapshot(budget_tokens)["usage"]
+        usage = LLMUsage(**measured_usage) if measured_usage is not None else None
+        usage_complete = measured_usage is not None
         status = "partial" if stop_reason and step_index else "budget_exceeded" if stop_reason else "completed"
         update_agent_run(
             run_id, status=status, provider=provider_name, model=model_name,
@@ -637,32 +667,46 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
         for chart in charts:
             yield "chart", chart.model_dump()
         if not final_streamed:
+            observation.visible_text(content)
             yield "message", {"content": content}
         yield "usage", usage.__dict__ if usage_complete and usage else None
+        observation.stage = "persistence"
         save_chat_turn(
             session_id, goal, content, provider_name, model_name,
             usage if usage_complete else None,
             sources=[source.model_dump() for source in sources],
             **({"workspace_id": req.workspace_id} if req.workspace_id else {}),
         )
+        if stop_reason:
+            observation.fail("budget", stop_reason)
+        terminal = True
+        yield metrics_event(final=True)
         yield "agent_status", {"run_id": run_id, "status": status, "reason": stop_reason}
         yield "done", {"session_id": session_id, "agent_run_id": run_id}
-        terminal = True
     except AgentCancelled as exc:
         update_agent_run(run_id, status="cancelled", error=str(exc), completed=True)
         terminal = True
+        observation.fail(observation.stage, "user_cancelled")
+        yield metrics_event(final=True)
         yield "agent_status", {"run_id": run_id, "status": "cancelled", "reason": str(exc)}
     except GeneratorExit:
-        update_agent_run(run_id, status="cancelled", error="client_cancelled", completed=True)
-        terminal = True
+        if not terminal:
+            observation.fail(observation.stage, "client_disconnected")
+            metrics_event(final=True)
+            update_agent_run(run_id, status="cancelled", error="client_cancelled", completed=True)
+            terminal = True
         raise
     except Exception as exc:
+        observation.fail(observation.stage, type(exc).__name__)
         update_agent_run(run_id, status="failed", error=f"{type(exc).__name__}: {exc}", completed=True)
         terminal = True
+        yield metrics_event(final=True)
         yield "agent_status", {"run_id": run_id, "status": "failed", "reason": f"{type(exc).__name__}: {exc}"}
         yield "error", {"message": f"Agent failed: {type(exc).__name__}: {exc}"}
     finally:
         if not terminal:
+            observation.fail(observation.stage, "stream_closed")
+            metrics_event(final=True)
             update_agent_run(run_id, status="cancelled", error="stream_closed", completed=True)
         with _cancel_lock:
             _cancel_events.pop(run_id, None)

@@ -2,6 +2,14 @@
 
 Maintain a concise, factual record for changes on the active feature branch. Link to the exact commit/acceptance report, distinguish mock/replay vs live tests, and list known limits. Do not describe unverified behavior as complete.
 
+## 2026-10-20 — Agent Observability V1
+
+- Added bounded per-run monotonic measurements for total duration, first nonblank Citation-validated text (TTFT), individual tool spans, Provider call attempts/durations/Usage, and terminal stage/error type. Reuses Agent orchestration and budgets; no new monitoring framework or external API calls.
+- Persists optional versioned metrics in existing `agent_runs.plan_json` metadata; old plan arrays remain readable and public `plan` stays an array. No new columns, DDL or backfill; did not connect to or modify the user's PostgreSQL. New-envelope rollback compatibility must be checked on an isolated copy before deployment.
+- Added `agent_metrics` SSE snapshots and metrics projection through existing run detail APIs; original Agent panel now displays timing, model/tool attempts, nullable usage/cost, and errors. Unknown or incomplete Usage stays null, including unreported failed attempts before repair; fees are never guessed as zero.
+- Offline tests cover completion, recovered tool failure, LLM failures, cancellation before/after Usage arrives, token-budget termination, missing Usage, repair attempts, Citation-buffer TTFT, disconnect, legacy persistence and SSE/detail Workspace consistency. New suite **14 passed**; complete backend **150 passed, 65 subtests passed**; `vue-tsc --noEmit` and frontend build passed (existing warnings only).
+- Limitations: Provider count is not SDK HTTP retry count; stream timing includes consumer/backpressure waiting; no fresh browser/live-provider acceptance or PostgreSQL recovery sign-off. Original simple Chat remains on its existing path. Docs: `docs/agent-observability-v1.md`; technical handbook updated.
+
 ## 2026-10-20 — Project architecture and learning handbook
 
 - Added `docs/technical-handbook.md`: a detailed Chinese handbook with 32 consistently structured topics covering the actual frontend/backend stack, model/providers, Agent/tools, SSE, RAG/search/citations, persistence, data analysis, long-term memory, security, evaluation, observability and future deployment/model topics.

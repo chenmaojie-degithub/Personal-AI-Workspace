@@ -600,12 +600,11 @@ def update_agent_run(
     usage: LLMUsage | None = None,
     error: str | None = None,
     completed: bool = False,
+    metrics: dict | None = None,
 ) -> None:
     values: dict[str, object] = {"updated_at": datetime.now(timezone.utc).isoformat()}
     if status is not None:
         values["status"] = status
-    if plan is not None:
-        values["plan_json"] = json.dumps(plan, ensure_ascii=False)
     if provider is not None:
         values["provider"] = provider
     if model is not None:
@@ -621,6 +620,22 @@ def update_agent_run(
     if completed:
         values["completed_at"] = values["updated_at"]
     with _connection() as (connection, placeholder):
+        if plan is not None or metrics is not None:
+            row = connection.execute(
+                f"SELECT plan_json FROM agent_runs WHERE id = {placeholder}", (run_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError("Agent run not found")
+            previous = json.loads(row["plan_json"])
+            previous_plan = previous.get("steps", []) if isinstance(previous, dict) else previous
+            previous_metrics = previous.get("metrics") if isinstance(previous, dict) else None
+            next_plan = plan if plan is not None else previous_plan
+            next_metrics = metrics if metrics is not None else previous_metrics
+            # New runs can store optional metadata without DDL. Legacy plan arrays remain readable.
+            values["plan_json"] = json.dumps(
+                {"steps": next_plan, "metrics": next_metrics} if next_metrics is not None else next_plan,
+                ensure_ascii=False,
+            )
         assignments = ", ".join(f"{name} = {placeholder}" for name in values)
         cursor = connection.execute(
             f"UPDATE agent_runs SET {assignments} WHERE id = {placeholder}",
@@ -682,7 +697,13 @@ def get_agent_run(run_id: str, workspace_id: str | None = None) -> dict | None:
             (run_id,),
         ).fetchall()
     result = dict(row)
-    result["plan"] = json.loads(result.pop("plan_json"))
+    payload = json.loads(result.pop("plan_json"))
+    result["plan"] = payload.get("steps", []) if isinstance(payload, dict) else payload
+    result["metrics"] = payload.get("metrics") if isinstance(payload, dict) else None
+    if result["metrics"] is not None:
+        usage = result["metrics"].get("usage")
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            result[key] = usage[key] if usage is not None else None
     result["created_at"] = result.pop("created_at_text")
     result["updated_at"] = result.pop("updated_at_text")
     result["completed_at"] = result.pop("completed_at_text")
@@ -690,6 +711,9 @@ def get_agent_run(run_id: str, workspace_id: str | None = None) -> dict | None:
     for step in steps:
         item = dict(step)
         item["input"] = json.loads(item.pop("input_json")) if item["input_json"] else None
+        timings = (result["metrics"] or {}).get("tools", [])
+        item["duration_ms"] = next((timing["duration_ms"] for timing in timings
+                                    if timing["step_index"] == item["step_index"]), None)
         result["steps"].append(item)
     return result
 
