@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 
 from app.api.routes.chat import (
     _build_system_prompt,
+    _conversation_messages,
     _extract_filename_from_query,
     _needs_full_document,
     _should_use_rag,
@@ -57,7 +58,7 @@ def _events(req: ChatRequest) -> Iterator[str]:
         tools = [item.as_openai_tool() for item in specs] or None
         messages = [
             {"role": "system", "content": _build_system_prompt(req, list(tool_map))},
-            *({"role": item.role, "content": item.content} for item in req.messages),
+            *_conversation_messages(req),
         ]
         citations = CitationRegistry()
         sources = citations.sources

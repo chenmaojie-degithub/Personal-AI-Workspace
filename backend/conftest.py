@@ -81,6 +81,9 @@ def isolated_tests(monkeypatch):
     from app.core.config import settings
     from app.rag import embeddings
 
+    # Memory integration tests explicitly opt in to their own temporary sidecar.
+    monkeypatch.setattr(settings, "memory_enabled", False)
+
     for name in ("exa_api_key", "deepseek_api_key", "openrouter_api_key", "openai_api_key", "openai_embedding_api_key"):
         monkeypatch.setattr(settings, name, None)
         monkeypatch.setenv(name.upper(), "")

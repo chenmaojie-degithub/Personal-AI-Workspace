@@ -28,6 +28,7 @@ from fastapi import APIRouter
 from app.core.config import settings
 from app.core.database import DEFAULT_WORKSPACE_ID, get_document_record, get_workspace, save_chat_turn, session_workspace_id
 from app.services.citations import CitationRegistry
+from app.services.memory import memory_messages
 from app.models.chat import ChartArtifact, ChatSettings, CitationSource, ChatMessage, ChatRequest, ChatResponse, ToolCallLog
 from app.providers.factory import create_llm_provider
 from app.providers.base import LLMUsage
@@ -95,6 +96,12 @@ def _build_system_prompt(req: ChatRequest, enabled_tool_names: list[str]) -> str
             lines.extend(["", "Workspace instructions:", workspace["system_prompt"].strip()])
 
     return "\n".join(lines).strip()
+
+
+def _conversation_messages(req: ChatRequest) -> list[dict]:
+    query = next((item.content for item in reversed(req.messages) if item.role == "user"), "")
+    return [*memory_messages(req.workspace_id, query),
+            *({"role": item.role, "content": item.content} for item in req.messages)]
 
 
 def relevant_tool_specs(req: ChatRequest, specs: list[ToolSpec]) -> list[ToolSpec]:
@@ -339,7 +346,7 @@ def orchestrate_chat(req: ChatRequest) -> ChatResponse:
     # 前端会发送完整对话历史；这里在最前面补充系统提示词，组成 Provider 的统一 messages。
     messages: list[dict] = [
         {"role": "system", "content": system_prompt},
-        *({"role": m.role, "content": m.content} for m in req.messages),
+        *_conversation_messages(req),
     ]
     citations = CitationRegistry()
     sources = citations.sources

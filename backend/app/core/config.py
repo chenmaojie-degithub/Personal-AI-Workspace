@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     database_url: str | None = None
     database_path: str = "./data/ai_chat.sqlite3"
     postgres_target_password: str | None = None
+
+    # Opt-in isolated SQLite sidecar; never uses DATABASE_URL or PostgreSQL DDL.
+    memory_enabled: bool = False
+    memory_database_path: str = "./data/memory.sqlite3"
+    memory_context_token_budget: int = Field(default=512, ge=0, le=2048)
 
     @property
     def effective_database_url(self) -> str:

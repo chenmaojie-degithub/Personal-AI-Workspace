@@ -2,6 +2,13 @@
 
 Maintain a concise, factual record for changes on the active feature branch. Link to the exact commit/acceptance report, distinguish mock/replay vs live tests, and list known limits. Do not describe unverified behavior as complete.
 
+## 2026-10-20 — Long-term Memory V1
+
+- Added opt-in `MemoryService` and explicit Workspace-scoped CRUD/query APIs using a separate SQLite sidecar, never the business database connection. User confirmation is mandatory for create/update; normalized keys deduplicate identical writes, conflicting creates/stale updates or deletes return 409. Every lookup/mutation includes Workspace scope. No automatic extraction, memory write tools, frontend manager, embeddings or Chroma changes.
+- Ordinary Chat and Agent, synchronous and SSE, reuse bounded lexical memory context across Sessions. At most 3 matching records, deterministic ordering, full serialized-message UTF-8 byte cap plus framing reserve (default 512, hard maximum 2048). This is a conservative byte-level tokenizer bound, not measured usage for arbitrary providers. Memory values remain JSON user-context data; only a fixed server policy is system-level. Storage failure skips injection without logging private contents.
+- Added 22 offline tests: CRUD/confirmation, duplicate/conflict/version checks, Workspace boundaries, deletion, cross-session injection across four paths, Chinese matching, budget, hostile-content structure, disabled/no-DB path, wrong-file refusal, independent storage with business connections forbidden, and SQLite backup/restore integrity. Targeted **22 passed**; full backend **187 passed**; `vue-tsc --noEmit` and production build passed, existing warnings only.
+- Default remains disabled; no `.env` modification, user PostgreSQL connection/DDL/migration or real LLM/Exa/Embedding requests. PostgreSQL production migration and live-model acceptance remain **NOT VERIFIED**. Docs include schema, API examples, migration/rollback design and limits: `docs/memory-v1.md`. Sidecar orphan retention after Workspace deletion and in-flight context snapshots are explicitly documented; no automatic user-data deletion.
+
 ## 2026-10-20 — Agent Evaluation V1
 
 - Added 12 fixed offline scenarios using existing Mock Provider helpers, real routing/Agent execution, server tool validation, Citation registry and temporary SQLite persistence. Covers direct answers, Web, RAG, mixed evidence, failure recovery, malformed calls, citation identity/deduplication, invalid citations, token limits, cancellation and Workspace boundaries. No application runtime changes, real API requests or user PostgreSQL access.
