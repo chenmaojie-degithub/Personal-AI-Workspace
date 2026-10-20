@@ -2,6 +2,13 @@
 
 Maintain a concise, factual record for changes on the active feature branch. Link to the exact commit/acceptance report, distinguish mock/replay vs live tests, and list known limits. Do not describe unverified behavior as complete.
 
+## 2026-10-20 — Agent Evaluation V1
+
+- Added 12 fixed offline scenarios using existing Mock Provider helpers, real routing/Agent execution, server tool validation, Citation registry and temporary SQLite persistence. Covers direct answers, Web, RAG, mixed evidence, failure recovery, malformed calls, citation identity/deduplication, invalid citations, token limits, cancellation and Workspace boundaries. No application runtime changes, real API requests or user PostgreSQL access.
+- Added independent expected tool/source identities, deterministic scoring and explicit JSON export with source hashes. Baseline: **12/12 scenarios passed**, **12/12 tool sequences matched**, **0 forbidden executions**, **8/8 emitted references valid**; records 2 rejected dispatch attempts, 1 intentionally repeated search and 44 Mock model calls. Four unknown Usage scenarios keep aggregate Usage null; known subtotal is 272 synthetic tokens, not a bill or complete usage total.
+- Targeted suite **15 passed** (12 scenarios + 3 scorer safeguards); full backend **165 passed**; `npx vue-tsc --noEmit` and `npm run build` passed. Existing Starlette deprecation and Vite bundle-size warnings remain.
+- Fixed-script pass rate does not establish live model task success or factual accuracy. RAG/search handlers are synthetic; SSE is exercised through its route generator, not a new browser/HTTP acceptance run. Original PostgreSQL recovery blocker remains unchanged. Report/reproduction: `docs/agent-evaluation-v1.md`; machine baseline: `docs/evaluation/agent-evaluation-v1.json`.
+
 ## 2026-10-20 — Agent Observability V1
 
 - Added bounded per-run monotonic measurements for total duration, first nonblank Citation-validated text (TTFT), individual tool spans, Provider call attempts/durations/Usage, and terminal stage/error type. Reuses Agent orchestration and budgets; no new monitoring framework or external API calls.

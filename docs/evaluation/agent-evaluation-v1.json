@@ -1,0 +1,607 @@
+{
+  "schema_version": 1,
+  "suite_version": 1,
+  "engine_revision_at_run": "6aacb437eb888d0e9ada7290bf326c377c6d366c",
+  "generated_at_utc": "2026-10-20T07:51:27.925405+00:00",
+  "mode": "offline scripted providers and synthetic evidence; no LLM judge",
+  "source_sha256": {
+    "backend/app/tests/fixtures/agent_evaluation_v1.json": "9e38ff25b1176d157893d16d75a37996d0f48d54cf2c7bd93473947dfc91d557",
+    "backend/app/tests/test_agent_evaluation.py": "af0c15a406ebed02ec66c0f6757c0584e4271c5ca98486fc9f4a3d02ae166d66",
+    "backend/app/agents/orchestrator.py": "9ce50be9eb3639f50b765b55c3e54ae070abfe714b9e0161203680d38393904c",
+    "backend/app/agents/observability.py": "120e8b22c849c366f22e15945a59d96e3714d1ab67b0bbc77a75301a62a8eec5",
+    "backend/app/services/citations.py": "d4062e4481d161976c81dedca81095c22752488f6042fb04ef54bfc12c8caafa",
+    "backend/app/tools/registry.py": "cf547f0fdcfacd540f812dae4f7a504c0621512ad3719c969e4102f4f0fe5194",
+    "backend/app/api/routes/chat_stream.py": "311ec535d24e7ba4315de9c128d396de059c0512918a8c62428bd20cd1519afb"
+  },
+  "summary": {
+    "scenario_count": 12,
+    "passed": 12,
+    "scenario_pass_rate": 1.0,
+    "tool_match_rate": 1.0,
+    "forbidden_tool_executions": 0,
+    "rejected_tool_attempts": 2,
+    "repeated_tool_attempts": 1,
+    "model_call_count": 44,
+    "citation_reference_count": 8,
+    "valid_citation_references": 8,
+    "citation_structure_accuracy": 1.0,
+    "usage": null,
+    "known_usage_subtotal": {
+      "prompt_tokens": 219,
+      "completion_tokens": 53,
+      "total_tokens": 272
+    },
+    "unknown_usage_scenarios": 4,
+    "usage_origin": "scripted Mock Provider, not real service billing"
+  },
+  "scenarios": [
+    {
+      "id": "simple",
+      "goal": "Explain what a variable is.",
+      "passed": true,
+      "checks": {
+        "route_matches": true,
+        "status_matches": true,
+        "tools_match": true,
+        "no_forbidden_execution": true,
+        "rejected_attempts_match": true,
+        "repeats_match": true,
+        "model_calls_match": true,
+        "observation_matches_provider": true,
+        "source_catalog_matches": true,
+        "citation_references_valid": true,
+        "required_citations_present": true,
+        "failure_type_matches": true,
+        "control_markers_hidden": true,
+        "completed_chat_saved_once": true,
+        "done_matches_completion": true,
+        "simple_no_planner": true
+      },
+      "expected_status": "completed",
+      "actual_status": "completed",
+      "expected_tools": [],
+      "actual_tools": [],
+      "forbidden_tool_executions": 0,
+      "rejected_tool_attempts": 0,
+      "repeated_tool_attempts": 0,
+      "model_call_count": 1,
+      "usage": {
+        "prompt_tokens": 5,
+        "completion_tokens": 1,
+        "total_tokens": 6
+      },
+      "duration_ms": 16.0,
+      "duration_scope": "direct route monotonic",
+      "failure_type": null,
+      "citation_reference_count": 0,
+      "valid_citation_references": 0,
+      "citation_structure_accuracy": null,
+      "source_catalog": []
+    },
+    {
+      "id": "web",
+      "goal": "Research the latest web release.",
+      "passed": true,
+      "checks": {
+        "route_matches": true,
+        "status_matches": true,
+        "tools_match": true,
+        "no_forbidden_execution": true,
+        "rejected_attempts_match": true,
+        "repeats_match": true,
+        "model_calls_match": true,
+        "observation_matches_provider": true,
+        "source_catalog_matches": true,
+        "citation_references_valid": true,
+        "required_citations_present": true,
+        "failure_type_matches": true,
+        "control_markers_hidden": true,
+        "completed_chat_saved_once": true,
+        "done_matches_completion": true,
+        "simple_no_planner": true
+      },
+      "expected_status": "completed",
+      "actual_status": "completed",
+      "expected_tools": [
+        "search_web"
+      ],
+      "actual_tools": [
+        "search_web"
+      ],
+      "forbidden_tool_executions": 0,
+      "rejected_tool_attempts": 0,
+      "repeated_tool_attempts": 0,
+      "model_call_count": 4,
+      "usage": {
+        "prompt_tokens": 29,
+        "completion_tokens": 7,
+        "total_tokens": 36
+      },
+      "duration_ms": 63.0,
+      "duration_scope": "Agent Run monotonic",
+      "failure_type": null,
+      "citation_reference_count": 1,
+      "valid_citation_references": 1,
+      "citation_structure_accuracy": 1.0,
+      "source_catalog": [
+        "web:https://example.test/alpha",
+        "web:https://example.test/beta",
+        "web:https://example.test/gamma"
+      ]
+    },
+    {
+      "id": "rag",
+      "goal": "Compare facts in the knowledge document.",
+      "passed": true,
+      "checks": {
+        "route_matches": true,
+        "status_matches": true,
+        "tools_match": true,
+        "no_forbidden_execution": true,
+        "rejected_attempts_match": true,
+        "repeats_match": true,
+        "model_calls_match": true,
+        "observation_matches_provider": true,
+        "source_catalog_matches": true,
+        "citation_references_valid": true,
+        "required_citations_present": true,
+        "failure_type_matches": true,
+        "control_markers_hidden": true,
+        "completed_chat_saved_once": true,
+        "done_matches_completion": true,
+        "simple_no_planner": true
+      },
+      "expected_status": "completed",
+      "actual_status": "completed",
+      "expected_tools": [
+        "search_knowledge"
+      ],
+      "actual_tools": [
+        "search_knowledge"
+      ],
+      "forbidden_tool_executions": 0,
+      "rejected_tool_attempts": 0,
+      "repeated_tool_attempts": 0,
+      "model_call_count": 4,
+      "usage": {
+        "prompt_tokens": 29,
+        "completion_tokens": 7,
+        "total_tokens": 36
+      },
+      "duration_ms": 63.0,
+      "duration_scope": "Agent Run monotonic",
+      "failure_type": null,
+      "citation_reference_count": 1,
+      "valid_citation_references": 1,
+      "citation_structure_accuracy": 1.0,
+      "source_catalog": [
+        "knowledge:local-doc:0"
+      ]
+    },
+    {
+      "id": "mixed",
+      "goal": "Research and compare web sources with knowledge documents.",
+      "passed": true,
+      "checks": {
+        "route_matches": true,
+        "status_matches": true,
+        "tools_match": true,
+        "no_forbidden_execution": true,
+        "rejected_attempts_match": true,
+        "repeats_match": true,
+        "model_calls_match": true,
+        "observation_matches_provider": true,
+        "source_catalog_matches": true,
+        "citation_references_valid": true,
+        "required_citations_present": true,
+        "failure_type_matches": true,
+        "control_markers_hidden": true,
+        "completed_chat_saved_once": true,
+        "done_matches_completion": true,
+        "simple_no_planner": true
+      },
+      "expected_status": "completed",
+      "actual_status": "completed",
+      "expected_tools": [
+        "search_web",
+        "search_knowledge"
+      ],
+      "actual_tools": [
+        "search_web",
+        "search_knowledge"
+      ],
+      "forbidden_tool_executions": 0,
+      "rejected_tool_attempts": 0,
+      "repeated_tool_attempts": 0,
+      "model_call_count": 5,
+      "usage": {
+        "prompt_tokens": 37,
+        "completion_tokens": 9,
+        "total_tokens": 46
+      },
+      "duration_ms": 94.0,
+      "duration_scope": "Agent Run monotonic",
+      "failure_type": null,
+      "citation_reference_count": 2,
+      "valid_citation_references": 2,
+      "citation_structure_accuracy": 1.0,
+      "source_catalog": [
+        "web:https://example.test/alpha",
+        "web:https://example.test/beta",
+        "web:https://example.test/gamma",
+        "knowledge:local-doc:0"
+      ]
+    },
+    {
+      "id": "tool_recovery",
+      "goal": "Research the web and compare knowledge evidence after failure.",
+      "passed": true,
+      "checks": {
+        "route_matches": true,
+        "status_matches": true,
+        "tools_match": true,
+        "no_forbidden_execution": true,
+        "rejected_attempts_match": true,
+        "repeats_match": true,
+        "model_calls_match": true,
+        "observation_matches_provider": true,
+        "source_catalog_matches": true,
+        "citation_references_valid": true,
+        "required_citations_present": true,
+        "failure_type_matches": true,
+        "control_markers_hidden": true,
+        "completed_chat_saved_once": true,
+        "done_matches_completion": true,
+        "simple_no_planner": true
+      },
+      "expected_status": "completed",
+      "actual_status": "completed",
+      "expected_tools": [
+        "search_web",
+        "search_knowledge"
+      ],
+      "actual_tools": [
+        "search_web",
+        "search_knowledge"
+      ],
+      "forbidden_tool_executions": 0,
+      "rejected_tool_attempts": 0,
+      "repeated_tool_attempts": 0,
+      "model_call_count": 5,
+      "usage": {
+        "prompt_tokens": 37,
+        "completion_tokens": 9,
+        "total_tokens": 46
+      },
+      "duration_ms": 109.0,
+      "duration_scope": "Agent Run monotonic",
+      "failure_type": null,
+      "citation_reference_count": 1,
+      "valid_citation_references": 1,
+      "citation_structure_accuracy": 1.0,
+      "source_catalog": [
+        "knowledge:local-doc:0"
+      ]
+    },
+    {
+      "id": "invalid_tool",
+      "goal": "Research the web and verify with knowledge documents.",
+      "passed": true,
+      "checks": {
+        "route_matches": true,
+        "status_matches": true,
+        "tools_match": true,
+        "no_forbidden_execution": true,
+        "rejected_attempts_match": true,
+        "repeats_match": true,
+        "model_calls_match": true,
+        "observation_matches_provider": true,
+        "source_catalog_matches": true,
+        "citation_references_valid": true,
+        "required_citations_present": true,
+        "failure_type_matches": true,
+        "control_markers_hidden": true,
+        "completed_chat_saved_once": true,
+        "done_matches_completion": true,
+        "simple_no_planner": true
+      },
+      "expected_status": "completed",
+      "actual_status": "completed",
+      "expected_tools": [
+        "search_knowledge"
+      ],
+      "actual_tools": [
+        "search_knowledge"
+      ],
+      "forbidden_tool_executions": 0,
+      "rejected_tool_attempts": 1,
+      "repeated_tool_attempts": 0,
+      "model_call_count": 6,
+      "usage": null,
+      "duration_ms": 93.0,
+      "duration_scope": "Agent Run monotonic",
+      "failure_type": null,
+      "citation_reference_count": 1,
+      "valid_citation_references": 1,
+      "citation_structure_accuracy": 1.0,
+      "source_catalog": [
+        "knowledge:local-doc:0"
+      ]
+    },
+    {
+      "id": "citation_identity",
+      "goal": "Research and compare web and knowledge sources with repeated searches.",
+      "passed": true,
+      "checks": {
+        "route_matches": true,
+        "status_matches": true,
+        "tools_match": true,
+        "no_forbidden_execution": true,
+        "rejected_attempts_match": true,
+        "repeats_match": true,
+        "model_calls_match": true,
+        "observation_matches_provider": true,
+        "source_catalog_matches": true,
+        "citation_references_valid": true,
+        "required_citations_present": true,
+        "failure_type_matches": true,
+        "control_markers_hidden": true,
+        "completed_chat_saved_once": true,
+        "done_matches_completion": true,
+        "simple_no_planner": true
+      },
+      "expected_status": "completed",
+      "actual_status": "completed",
+      "expected_tools": [
+        "search_web",
+        "search_web",
+        "search_knowledge"
+      ],
+      "actual_tools": [
+        "search_web",
+        "search_web",
+        "search_knowledge"
+      ],
+      "forbidden_tool_executions": 0,
+      "rejected_tool_attempts": 0,
+      "repeated_tool_attempts": 1,
+      "model_call_count": 6,
+      "usage": {
+        "prompt_tokens": 45,
+        "completion_tokens": 11,
+        "total_tokens": 56
+      },
+      "duration_ms": 125.0,
+      "duration_scope": "Agent Run monotonic",
+      "failure_type": null,
+      "citation_reference_count": 2,
+      "valid_citation_references": 2,
+      "citation_structure_accuracy": 1.0,
+      "source_catalog": [
+        "web:https://example.test/alpha",
+        "web:https://example.test/beta",
+        "web:https://example.test/gamma",
+        "knowledge:local-doc:0"
+      ]
+    },
+    {
+      "id": "invalid_citation",
+      "goal": "Research the latest web release and compare sources.",
+      "passed": true,
+      "checks": {
+        "route_matches": true,
+        "status_matches": true,
+        "tools_match": true,
+        "no_forbidden_execution": true,
+        "rejected_attempts_match": true,
+        "repeats_match": true,
+        "model_calls_match": true,
+        "observation_matches_provider": true,
+        "source_catalog_matches": true,
+        "citation_references_valid": true,
+        "required_citations_present": true,
+        "failure_type_matches": true,
+        "control_markers_hidden": true,
+        "completed_chat_saved_once": true,
+        "done_matches_completion": true,
+        "simple_no_planner": true
+      },
+      "expected_status": "failed",
+      "actual_status": "failed",
+      "expected_tools": [
+        "search_web"
+      ],
+      "actual_tools": [
+        "search_web"
+      ],
+      "forbidden_tool_executions": 0,
+      "rejected_tool_attempts": 0,
+      "repeated_tool_attempts": 0,
+      "model_call_count": 4,
+      "usage": null,
+      "duration_ms": 47.0,
+      "duration_scope": "Agent Run monotonic",
+      "failure_type": "CitationError",
+      "citation_reference_count": 0,
+      "valid_citation_references": 0,
+      "citation_structure_accuracy": null,
+      "source_catalog": [
+        "web:https://example.test/alpha",
+        "web:https://example.test/beta",
+        "web:https://example.test/gamma"
+      ]
+    },
+    {
+      "id": "budget",
+      "goal": "Research the latest web release.",
+      "passed": true,
+      "checks": {
+        "route_matches": true,
+        "status_matches": true,
+        "tools_match": true,
+        "no_forbidden_execution": true,
+        "rejected_attempts_match": true,
+        "repeats_match": true,
+        "model_calls_match": true,
+        "observation_matches_provider": true,
+        "source_catalog_matches": true,
+        "citation_references_valid": true,
+        "required_citations_present": true,
+        "failure_type_matches": true,
+        "control_markers_hidden": true,
+        "completed_chat_saved_once": true,
+        "done_matches_completion": true,
+        "simple_no_planner": true
+      },
+      "expected_status": "budget_exceeded",
+      "actual_status": "budget_exceeded",
+      "expected_tools": [],
+      "actual_tools": [],
+      "forbidden_tool_executions": 0,
+      "rejected_tool_attempts": 0,
+      "repeated_tool_attempts": 0,
+      "model_call_count": 1,
+      "usage": {
+        "prompt_tokens": 8,
+        "completion_tokens": 2,
+        "total_tokens": 10
+      },
+      "duration_ms": 31.0,
+      "duration_scope": "Agent Run monotonic",
+      "failure_type": "token_budget",
+      "citation_reference_count": 0,
+      "valid_citation_references": 0,
+      "citation_structure_accuracy": null,
+      "source_catalog": []
+    },
+    {
+      "id": "cancel",
+      "goal": "Research and compare the latest web sources.",
+      "passed": true,
+      "checks": {
+        "route_matches": true,
+        "status_matches": true,
+        "tools_match": true,
+        "no_forbidden_execution": true,
+        "rejected_attempts_match": true,
+        "repeats_match": true,
+        "model_calls_match": true,
+        "observation_matches_provider": true,
+        "source_catalog_matches": true,
+        "citation_references_valid": true,
+        "required_citations_present": true,
+        "failure_type_matches": true,
+        "control_markers_hidden": true,
+        "completed_chat_saved_once": true,
+        "done_matches_completion": true,
+        "simple_no_planner": true
+      },
+      "expected_status": "cancelled",
+      "actual_status": "cancelled",
+      "expected_tools": [
+        "search_web"
+      ],
+      "actual_tools": [
+        "search_web"
+      ],
+      "forbidden_tool_executions": 0,
+      "rejected_tool_attempts": 0,
+      "repeated_tool_attempts": 0,
+      "model_call_count": 4,
+      "usage": null,
+      "duration_ms": 62.0,
+      "duration_scope": "Agent Run monotonic",
+      "failure_type": "user_cancelled",
+      "citation_reference_count": 0,
+      "valid_citation_references": 0,
+      "citation_structure_accuracy": null,
+      "source_catalog": [
+        "web:https://example.test/alpha",
+        "web:https://example.test/beta",
+        "web:https://example.test/gamma"
+      ]
+    },
+    {
+      "id": "workspace_denied",
+      "goal": "Compare the attached knowledge documents.",
+      "passed": true,
+      "checks": {
+        "route_matches": true,
+        "status_matches": true,
+        "tools_match": true,
+        "no_forbidden_execution": true,
+        "rejected_attempts_match": true,
+        "repeats_match": true,
+        "model_calls_match": true,
+        "observation_matches_provider": true,
+        "source_catalog_matches": true,
+        "citation_references_valid": true,
+        "required_citations_present": true,
+        "failure_type_matches": true,
+        "control_markers_hidden": true,
+        "completed_chat_saved_once": true,
+        "done_matches_completion": true,
+        "simple_no_planner": true
+      },
+      "expected_status": "failed",
+      "actual_status": "failed",
+      "expected_tools": [],
+      "actual_tools": [],
+      "forbidden_tool_executions": 0,
+      "rejected_tool_attempts": 0,
+      "repeated_tool_attempts": 0,
+      "model_call_count": 0,
+      "usage": null,
+      "duration_ms": 15.0,
+      "duration_scope": "Agent Run monotonic",
+      "failure_type": "ValueError",
+      "citation_reference_count": 0,
+      "valid_citation_references": 0,
+      "citation_structure_accuracy": null,
+      "source_catalog": []
+    },
+    {
+      "id": "disabled_tool",
+      "goal": "Research the latest web release.",
+      "passed": true,
+      "checks": {
+        "route_matches": true,
+        "status_matches": true,
+        "tools_match": true,
+        "no_forbidden_execution": true,
+        "rejected_attempts_match": true,
+        "repeats_match": true,
+        "model_calls_match": true,
+        "observation_matches_provider": true,
+        "source_catalog_matches": true,
+        "citation_references_valid": true,
+        "required_citations_present": true,
+        "failure_type_matches": true,
+        "control_markers_hidden": true,
+        "completed_chat_saved_once": true,
+        "done_matches_completion": true,
+        "simple_no_planner": true
+      },
+      "expected_status": "completed",
+      "actual_status": "completed",
+      "expected_tools": [],
+      "actual_tools": [],
+      "forbidden_tool_executions": 0,
+      "rejected_tool_attempts": 1,
+      "repeated_tool_attempts": 0,
+      "model_call_count": 4,
+      "usage": {
+        "prompt_tokens": 29,
+        "completion_tokens": 7,
+        "total_tokens": 36
+      },
+      "duration_ms": 47.0,
+      "duration_scope": "Agent Run monotonic",
+      "failure_type": null,
+      "citation_reference_count": 0,
+      "valid_citation_references": 0,
+      "citation_structure_accuracy": null,
+      "source_catalog": []
+    }
+  ]
+}
