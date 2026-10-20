@@ -27,6 +27,7 @@ from fastapi import APIRouter
 
 from app.core.config import settings
 from app.core.database import DEFAULT_WORKSPACE_ID, get_document_record, get_workspace, save_chat_turn, session_workspace_id
+from app.services.citations import CitationRegistry
 from app.models.chat import ChartArtifact, ChatSettings, CitationSource, ChatMessage, ChatRequest, ChatResponse, ToolCallLog
 from app.providers.factory import create_llm_provider
 from app.providers.base import LLMUsage
@@ -340,7 +341,8 @@ def orchestrate_chat(req: ChatRequest) -> ChatResponse:
         {"role": "system", "content": system_prompt},
         *({"role": m.role, "content": m.content} for m in req.messages),
     ]
-    sources: list[CitationSource] = []
+    citations = CitationRegistry()
+    sources = citations.sources
     charts: list[ChartArtifact] = []
 
 # endregion
@@ -393,6 +395,8 @@ def orchestrate_chat(req: ChatRequest) -> ChatResponse:
                 )
                 for chunk in chunks
             ]
+            citations.add(sources)
+            sources = citations.sources
             # Build readable RAG context format
             # 检索结果作为独立上下文注入，而不是拼进用户原话，便于模型区分问题与资料。
             context_lines = [
@@ -411,7 +415,7 @@ def orchestrate_chat(req: ChatRequest) -> ChatResponse:
             context_lines.append(
                 "Instructions: Use the above retrieved chunks to answer the user's question. "
                 "The source may contain PDF extraction artifacts; do not invent missing content. "
-                "Cite only the numbered sources above using [1], [2], etc.; never invent a source number. "
+                "Use only markers from CITATION_CATALOG. "
                 "If the information is not in these chunks, clearly state that and ask for clarification."
             )
 
@@ -435,7 +439,7 @@ def orchestrate_chat(req: ChatRequest) -> ChatResponse:
     # LLMResponse 已经把厂商响应转换成 content、tool_calls、model、provider 和 usage。
     try:
         llm_response = provider.complete(
-            messages=messages,
+            messages=[*messages, citations.prompt()],
             tools=tools if tools else None,
         )
     except Exception as e:
@@ -488,7 +492,7 @@ def orchestrate_chat(req: ChatRequest) -> ChatResponse:
                 if name != "analyze_data" and not reused:
                     one_shot_results[name] = result
                 if name == "search_web" and isinstance(result, dict) and not reused:
-                    sources.extend(web_citations(result))
+                    citations.add(web_citations(result))
                 if name == "analyze_data" and isinstance(result, dict) and result.get("type") == "chart":
                     charts.append(ChartArtifact(url=result["url"], title=result["title"]))
                 preview = json.dumps(result, ensure_ascii=False)[:2000]
@@ -536,7 +540,7 @@ def orchestrate_chat(req: ChatRequest) -> ChatResponse:
         # 工具执行后再次调用 LLM，让模型读取结果并决定回答或继续分析。
         try:
             followup_response = provider.complete(
-                messages=messages,
+                messages=[*messages, citations.prompt()],
                 tools=tools if tools else None,
             )
             # 一次用户请求可能包含两次 LLM 调用，因此 Token Usage 必须逐项相加。
@@ -566,6 +570,10 @@ def orchestrate_chat(req: ChatRequest) -> ChatResponse:
 
     # ChatResponse 是对前端稳定的响应模型。
     # 除回答文本外，还返回工具执行日志与本次请求汇总后的 Token Usage。
+    try:
+        assistant_text = citations.render(assistant_text)
+    except ValueError as exc:
+        return ChatResponse(session_id=session_id, sources=sources, error=str(exc))
     assistant = ChatMessage(role="assistant", content=assistant_text or "(empty response)")
     # 一轮成功聊天在同一个业务数据库事务中保存 user、assistant 和可用的真实 usage。
     # usage 为 None 时仍保存消息，但数据库不会创建伪造的 0 Token 记录。
@@ -574,6 +582,7 @@ def orchestrate_chat(req: ChatRequest) -> ChatResponse:
             session_id=session_id,
             user_content=latest_user_message.content,
             assistant_content=assistant.content,
+            sources=[source.model_dump() for source in sources],
             provider=llm_response.provider,
             model=llm_response.model,
             usage=request_usage,

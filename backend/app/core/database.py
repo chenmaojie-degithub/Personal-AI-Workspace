@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     session_id TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
     content TEXT NOT NULL,
+    sources_json TEXT NOT NULL DEFAULT '[]',
     created_at TIMESTAMPTZ NOT NULL
 );
 
@@ -181,6 +182,9 @@ def _initialize_schema(connection, placeholder: str, id_type: str, database_key:
         schema = _SCHEMA_TEMPLATE.format(id_type=id_type)
         if placeholder == "?":
             connection.executescript(schema)
+            message_columns = {row["name"] for row in connection.execute("PRAGMA table_info(chat_messages)")}
+            if "sources_json" not in message_columns:
+                connection.execute("ALTER TABLE chat_messages ADD COLUMN sources_json TEXT NOT NULL DEFAULT '[]'")
             session_columns = {row["name"] for row in connection.execute("PRAGMA table_info(chat_sessions)")}
             if "title" not in session_columns:
                 connection.execute("ALTER TABLE chat_sessions ADD COLUMN title TEXT")
@@ -192,6 +196,7 @@ def _initialize_schema(connection, placeholder: str, id_type: str, database_key:
             for statement in schema.split(";"):
                 if statement.strip():
                     connection.execute(statement)
+            connection.execute("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS sources_json TEXT NOT NULL DEFAULT '[]'")
             connection.execute("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS title TEXT")
             connection.execute("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS folder_id TEXT REFERENCES project_folders(id)")
             connection.execute("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS position INTEGER NOT NULL DEFAULT 0")
@@ -252,6 +257,7 @@ def save_chat_turn(
     model: str | None,
     usage: LLMUsage | None,
     workspace_id: str | None = None,
+    sources: list[dict] | None = None,
 ) -> None:
     """Save one successful user/assistant turn and its optional usage atomically."""
     created_at = datetime.now(timezone.utc).isoformat()
@@ -270,10 +276,10 @@ def save_chat_turn(
                 )
                 _write_project_positions(cursor, placeholder, [("session", session_id), *siblings])
             cursor.executemany(
-                f"INSERT INTO chat_messages (session_id, role, content, created_at) VALUES ({', '.join([placeholder] * 4)})",
+                f"INSERT INTO chat_messages (session_id, role, content, created_at, sources_json) VALUES ({', '.join([placeholder] * 5)})",
                 [
-                    (session_id, "user", user_content, created_at),
-                    (session_id, "assistant", assistant_content, created_at),
+                    (session_id, "user", user_content, created_at, "[]"),
+                    (session_id, "assistant", assistant_content, created_at, json.dumps(sources or [], ensure_ascii=False)),
                 ],
             )
             if usage is not None and provider is not None and model is not None:
@@ -308,7 +314,7 @@ def list_messages(session_id: str, workspace_id: str | None = None) -> list[dict
         )
         rows = connection.execute(
             f"""
-            SELECT session_id, role, content, CAST(created_at AS TEXT) AS created_at
+            SELECT session_id, role, content, sources_json, CAST(created_at AS TEXT) AS created_at
             FROM chat_messages
             WHERE session_id = {placeholder}
               {workspace_filter}
@@ -316,7 +322,10 @@ def list_messages(session_id: str, workspace_id: str | None = None) -> list[dict
             """,
             (session_id, workspace_id) if workspace_id else (session_id,),
         ).fetchall()
-    return [dict(row) for row in rows]
+    messages = [dict(row) for row in rows]
+    for message in messages:
+        message["sources"] = json.loads(message.pop("sources_json"))
+    return messages
 
 
 def list_sessions(workspace_id: str | None = None) -> list[dict]:

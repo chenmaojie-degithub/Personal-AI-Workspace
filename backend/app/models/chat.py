@@ -39,6 +39,7 @@ class ToolCallLog(BaseModel):
 
 
 class CitationSource(BaseModel):
+    citation_id: int | None = Field(default=None, ge=1)
     type: Literal["knowledge", "web"] = "knowledge"
     title: str | None = None
     url: str | None = None
@@ -67,6 +68,7 @@ class ChatResponse(BaseModel):
 
 
 class StoredMessage(BaseModel):
+    sources: list[CitationSource] = Field(default_factory=list)
     session_id: str
     role: Literal["user", "assistant"]
     content: str

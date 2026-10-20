@@ -30,6 +30,7 @@ export type UiChatMessage = TransportChatMessage & {
 export type ChartArtifact = { url: string; title: string }
 
 export type CitationSource = {
+  citation_id?: number | null
   type: 'knowledge' | 'web'
   title: string | null
   url: string | null
@@ -168,9 +169,9 @@ function createChat() {
       await workspaces.ensureLoaded()
       const res = await fetch(`${apiBaseUrl()}/sessions/${encodeURIComponent(currentSession)}/messages?workspace_id=${encodeURIComponent(workspaces.currentId.value ?? '')}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const history = await res.json() as Array<{ role: 'user' | 'assistant'; content: string }>
+      const history = await res.json() as Array<{ role: 'user' | 'assistant'; content: string; sources?: CitationSource[] }>
       if (version === restoreVersion && sessionId.value === currentSession) {
-        messages.value = history.map(({ role, content }) => ({ role, content }))
+        messages.value = history.map(({ role, content, sources }) => ({ role, content, sources }))
         await loadAgentRun(currentSession)
       }
     } catch (e) {
@@ -323,7 +324,15 @@ function createChat() {
         if (!event || !raw) return
         const data = JSON.parse(raw)
         if (event === 'message') assistant.content += data.content as string
-        else if (event === 'source') assistant.sources?.push(data as CitationSource)
+        else if (event === 'source') {
+          const source = data as CitationSource
+          const existing = assistant.sources?.find(item => source.citation_id != null
+            ? item.citation_id === source.citation_id
+            : item.type === source.type && (source.type === 'web'
+              ? item.url === source.url
+              : item.document_id === source.document_id && item.chunk_index === source.chunk_index))
+          if (!existing) assistant.sources?.push(source)
+        }
         else if (event === 'chart') {
           const chart = data as ChartArtifact
           assistant.charts?.push({ ...chart, url: new URL(chart.url, apiBaseUrl()).toString() })

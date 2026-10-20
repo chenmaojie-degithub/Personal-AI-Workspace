@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator
+from contextlib import ExitStack
 from uuid import uuid4
 
 from fastapi import APIRouter
@@ -19,6 +20,7 @@ from app.api.routes.chat import (
 from app.agents.orchestrator import run_agent, should_run_agent
 from app.core.config import settings
 from app.core.database import save_chat_turn
+from app.services.citations import CitationRegistry, CitationStream
 from app.models.chat import ChartArtifact, ChatRequest, CitationSource, ToolCallLog
 from app.providers.base import LLMStreamEvent, LLMUsage, ProviderToolCall
 from app.providers.factory import create_llm_provider
@@ -57,7 +59,8 @@ def _events(req: ChatRequest) -> Iterator[str]:
             {"role": "system", "content": _build_system_prompt(req, list(tool_map))},
             *({"role": item.role, "content": item.content} for item in req.messages),
         ]
-        sources: list[CitationSource] = []
+        citations = CitationRegistry()
+        sources = citations.sources
         charts: list[ChartArtifact] = []
 
         if _should_use_rag(req):
@@ -87,6 +90,8 @@ def _events(req: ChatRequest) -> Iterator[str]:
                     )
                     for chunk in chunks
                 ]
+                citations.add(sources)
+                sources = citations.sources
                 context = [f"RAG_CONTEXT: Retrieved information from uploaded files (session: {session_id}):", ""]
                 for index, chunk in enumerate(chunks, 1):
                     context.extend([
@@ -96,33 +101,45 @@ def _events(req: ChatRequest) -> Iterator[str]:
                     ])
                 context.append(
                     "Use the retrieved chunks to answer. The source may contain PDF extraction artifacts; "
-                    "do not invent missing content. Cite only numbered sources above using [1], [2], etc.; "
+                    "do not invent missing content. Use only markers from CITATION_CATALOG; "
                     "never invent a source number. If information is absent, say so."
                 )
                 messages.insert(1, {"role": "system", "content": "\n".join(context)})
 
+        citation_stream = CitationStream(citations)
         content_parts: list[str] = []
         usage: LLMUsage | None = None
         provider_name: str | None = None
         model: str | None = None
+        emitted_sources = 0
         one_shot_results: dict[str, object] = {}
         for tool_round in range(5):
+            for source in sources[emitted_sources:]:
+                yield _sse("source", source.model_dump())
+            emitted_sources = len(sources)
             round_parts: list[str] = []
             tool_calls: list[ProviderToolCall] = []
             round_usage: LLMUsage | None = None
-            for event in provider.stream(messages, tools):
-                if event.type == "message":
-                    if tools:
-                        round_parts.append(event.content)
-                    else:
-                        content_parts.append(event.content)
-                        yield _sse("message", {"content": event.content})
-                elif event.type == "tool_call" and event.tool_call:
-                    tool_calls.append(event.tool_call)
-                elif event.type == "usage":
-                    round_usage = event.usage
-                elif event.type == "done":
-                    provider_name, model = event.provider, event.model
+            with ExitStack() as cleanup:
+                stream = provider.stream([*messages, citations.prompt()], tools)
+                close = getattr(stream, "close", None)
+                if close:
+                    cleanup.callback(close)
+                for event in stream:
+                    if event.type == "message":
+                        if tools:
+                            round_parts.append(event.content)
+                        else:
+                            part = citation_stream.feed(event.content)
+                            content_parts.append(part)
+                            if part:
+                                yield _sse("message", {"content": part})
+                    elif event.type == "tool_call" and event.tool_call:
+                        tool_calls.append(event.tool_call)
+                    elif event.type == "usage":
+                        round_usage = event.usage
+                    elif event.type == "done":
+                        provider_name, model = event.provider, event.model
             usage = (
                 round_usage if tool_round == 0
                 else usage + round_usage if usage is not None and round_usage is not None
@@ -131,8 +148,10 @@ def _events(req: ChatRequest) -> Iterator[str]:
 
             if not tool_calls:
                 for part in round_parts:
+                    part = citation_stream.feed(part)
                     content_parts.append(part)
-                    yield _sse("message", {"content": part})
+                    if part:
+                        yield _sse("message", {"content": part})
                 break
             if tool_round == 4:
                 raise RuntimeError("Model exceeded the maximum of 4 tool-call rounds")
@@ -155,7 +174,7 @@ def _events(req: ChatRequest) -> Iterator[str]:
                     if call.name != "analyze_data" and not reused:
                         one_shot_results[call.name] = result
                     if call.name == "search_web" and isinstance(result, dict) and not reused:
-                        sources.extend(web_citations(result))
+                        citations.add(web_citations(result))
                     if call.name == "analyze_data" and isinstance(result, dict) and result.get("type") == "chart":
                         charts.append(ChartArtifact(url=result["url"], title=result["title"]))
                     log.output_preview = json.dumps(result, ensure_ascii=False)[:2000]
@@ -173,8 +192,10 @@ def _events(req: ChatRequest) -> Iterator[str]:
                 specs = [spec for spec in specs if spec.name not in one_shot_tools]
                 tools = [spec.as_openai_tool() for spec in specs] or None
 
-        for source in sources:
-            yield _sse("source", source.model_dump())
+        tail = citation_stream.finish()
+        if tail:
+            content_parts.append(tail)
+            yield _sse("message", {"content": tail})
         for chart in charts:
             yield _sse("chart", chart.model_dump())
         yield _sse("usage", usage.__dict__ if usage else None)
@@ -184,7 +205,8 @@ def _events(req: ChatRequest) -> Iterator[str]:
             save_chat_turn(
                 session_id=session_id,
                 user_content=latest_user.content,
-                assistant_content="".join(content_parts).strip() or "(empty response)",
+                assistant_content="".join(content_parts) or "(empty response)",
+                sources=[source.model_dump() for source in sources],
                 provider=provider_name,
                 model=model,
                 usage=usage,

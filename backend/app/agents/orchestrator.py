@@ -18,6 +18,7 @@ from app.core.database import (
     update_agent_run,
     upsert_agent_step,
 )
+from app.services.citations import CitationRegistry, CitationStream
 from app.models.chat import ChartArtifact, ChatRequest, CitationSource, ToolCallLog
 from app.providers.base import LLMResponse, LLMUsage
 from app.providers.factory import create_llm_provider
@@ -209,7 +210,9 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
     model_name: str | None = None
     content = ""
     final_streamed = False
-    sources: list[CitationSource] = []
+    citations = CitationRegistry()
+    sources = citations.sources
+    emitted_sources = 0
     charts: list[ChartArtifact] = []
 
     create_agent_run(run_id, session_id, workspace_id, goal)
@@ -291,15 +294,16 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
             if step_index:
                 update_agent_run(run_id, status="replanning", plan=plan, usage=usage if usage_complete else None)
                 yield "agent_status", {"run_id": run_id, "status": "replanning", "reason": None}
-            max_tokens = _completion_budget(messages, tools, budget_tokens)
+            call_messages = [*messages, citations.prompt()]
+            max_tokens = _completion_budget(call_messages, tools, budget_tokens)
             if max_tokens <= 0:
                 stop_reason = "token_budget"
                 break
             try:
-                response = provider.complete(messages, tools=tools, max_tokens=max_tokens)
+                response = provider.complete(call_messages, tools=tools, max_tokens=max_tokens)
             except TextToolCallError as exc:
                 model_calls += 1
-                budget_tokens += _failed_call_token_estimate(messages, tools, max_tokens)
+                budget_tokens += _failed_call_token_estimate(call_messages, tools, max_tokens)
                 logger.warning(
                     "agent text tool call rejected run_id=%s error_type=%s repair_attempt=1",
                     run_id, exc.code,
@@ -310,7 +314,7 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                     stop_reason = repair_limit
                     break
                 repair_messages = [
-                    *messages,
+                    *call_messages,
                     {
                         "role": "system",
                         "content": (
@@ -346,7 +350,7 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
             if response.usage is None:
                 usage_complete = False
                 usage = None
-            budget_tokens += response.usage.total_tokens if response.usage else _estimated_tokens(messages, response)
+            budget_tokens += response.usage.total_tokens if response.usage else _estimated_tokens(call_messages, response)
 
             response_limit = None
             if budget_tokens >= settings.agent_token_budget:
@@ -383,22 +387,29 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                             ),
                         },
                     ]
+                    final_messages.append(citations.prompt())
                     final_max_tokens = _completion_budget(final_messages, None, budget_tokens)
                     can_stream = final_max_tokens > 0
                     if not can_stream:
                         stream_block_reason = "token_budget"
                 if can_stream:
+                    for source in sources[emitted_sources:]:
+                        yield "source", source.model_dump()
+                    emitted_sources = len(sources)
                     final_usage: LLMUsage | None = None
                     final_parts: list[str] = []
+                    citation_stream = CitationStream(citations)
                     stream = provider.stream(final_messages, tools=None, max_tokens=final_max_tokens)
                     model_calls += 1
                     try:
                         for event in stream:
                             _raise_if_cancelled(run_id)
                             if event.type == "message":
-                                final_parts.append(event.content)
+                                part = citation_stream.feed(event.content)
+                                final_parts.append(part)
                                 final_streamed = True
-                                yield "message", {"content": event.content}
+                                if part:
+                                    yield "message", {"content": part}
                             elif event.type == "usage":
                                 final_usage = event.usage
                             elif event.type == "tool_call":
@@ -409,7 +420,11 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                         close = getattr(stream, "close", None)
                         if close:
                             close()
-                    content = "".join(final_parts).strip()
+                    tail = citation_stream.finish()
+                    if tail:
+                        final_parts.append(tail)
+                        yield "message", {"content": tail}
+                    content = "".join(final_parts)
                     usage = _usage_sum(usage, final_usage) if usage_complete else None
                     if final_usage is None:
                         usage_complete = False
@@ -476,9 +491,9 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                     tool_content = _tool_content(result, settings.agent_tool_result_max_chars)
                     log.output_preview = tool_content[:2000]
                     if call.name == "search_web" and isinstance(result, dict):
-                        sources.extend(web_citations(result))
+                        citations.add(web_citations(result))
                     if call.name in {"search_knowledge", "read_document"} and isinstance(result, dict):
-                        sources.extend(knowledge_citations(result))
+                        citations.add(knowledge_citations(result))
                     if call.name == "analyze_data" and isinstance(result, dict) and result.get("type") == "chart":
                         charts.append(ChartArtifact(url=result["url"], title=result["title"]))
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": tool_content})
@@ -547,22 +562,29 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                         "Clearly state what remains incomplete. Do not call another tool."
                     ),
                 })
-                max_tokens = _completion_budget(messages, None, budget_tokens)
+                summary_messages = [*messages, citations.prompt()]
+                max_tokens = _completion_budget(summary_messages, None, budget_tokens)
                 if max_tokens <= 0:
                     response = None
                 elif hasattr(provider, "stream"):
+                    for source in sources[emitted_sources:]:
+                        yield "source", source.model_dump()
+                    emitted_sources = len(sources)
                     response = None
                     final_usage = None
                     final_parts = []
-                    stream = provider.stream(messages, tools=None, max_tokens=max_tokens)
+                    citation_stream = CitationStream(citations)
+                    stream = provider.stream(summary_messages, tools=None, max_tokens=max_tokens)
                     model_calls += 1
                     try:
                         for event in stream:
                             _raise_if_cancelled(run_id)
                             if event.type == "message":
-                                final_parts.append(event.content)
+                                part = citation_stream.feed(event.content)
+                                final_parts.append(part)
                                 final_streamed = True
-                                yield "message", {"content": event.content}
+                                if part:
+                                    yield "message", {"content": part}
                             elif event.type == "usage":
                                 final_usage = event.usage
                             elif event.type == "tool_call":
@@ -573,7 +595,11 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                         close = getattr(stream, "close", None)
                         if close:
                             close()
-                    content = "".join(final_parts).strip()
+                    tail = citation_stream.finish()
+                    if tail:
+                        final_parts.append(tail)
+                        yield "message", {"content": tail}
+                    content = "".join(final_parts)
                     usage = _usage_sum(usage, final_usage) if usage_complete else None
                     if final_usage is None:
                         usage_complete = False
@@ -582,7 +608,7 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
                     else:
                         budget_tokens += final_usage.total_tokens
                 else:
-                    response = provider.complete(messages, tools=None, max_tokens=max_tokens)
+                    response = provider.complete(summary_messages, tools=None, max_tokens=max_tokens)
                 if response is None:
                     if not content:
                         content = f"Agent stopped because the {stop_reason} limit was reached before a final answer was available."
@@ -599,12 +625,14 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
             if not content:
                 content = f"Agent stopped because the {stop_reason} limit was reached before a final answer was available."
 
+        if not final_streamed:
+            content = citations.render(content)
         status = "partial" if stop_reason and step_index else "budget_exceeded" if stop_reason else "completed"
         update_agent_run(
             run_id, status=status, provider=provider_name, model=model_name,
             usage=usage if usage_complete else None, error=stop_reason, completed=True,
         )
-        for source in sources:
+        for source in sources[emitted_sources:]:
             yield "source", source.model_dump()
         for chart in charts:
             yield "chart", chart.model_dump()
@@ -614,6 +642,7 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
         save_chat_turn(
             session_id, goal, content, provider_name, model_name,
             usage if usage_complete else None,
+            sources=[source.model_dump() for source in sources],
             **({"workspace_id": req.workspace_id} if req.workspace_id else {}),
         )
         yield "agent_status", {"run_id": run_id, "status": status, "reason": stop_reason}
