@@ -2,6 +2,13 @@
 
 Maintain a concise, factual record for changes on the active feature branch. Link to the exact commit/acceptance report, distinguish mock/replay vs live tests, and list known limits. Do not describe unverified behavior as complete.
 
+## 2026-10-20 — Project architecture and learning handbook
+
+- Added `docs/technical-handbook.md`: a detailed Chinese handbook with 32 consistently structured topics covering the actual frontend/backend stack, model/providers, Agent/tools, SSE, RAG/search/citations, persistence, data analysis, long-term memory, security, evaluation, observability and future deployment/model topics.
+- Each topic explains concepts, mechanisms, current code, the problem solved, examples/validation, limitations, future study and interview questions. Clearly distinguishes the custom orchestrator from LangChain/LangGraph, implemented behavior from future directions, and live-provider evidence from mock/replay results.
+- Verified against dependency manifests and relevant source; added an architecture/data-flow diagram, code links, terminology comparisons, learning exercises and primary documentation references. Long-term memory receives its own treatment rather than replacing the rest of the handbook.
+- Docs-only change: checked all 32 topic structures, local links, code-fence balance, anchors, sensitive patterns and Git diff. No backend/frontend runtime changes or repeat full local build; no Exa, Embedding or LLM inference requests. Existing PostgreSQL restore permission blocker remains unchanged.
+
 ## 2026-10-20 — Live Citation check and PostgreSQL backup readiness
 
 - Docs-only validation update; no runtime code or configuration changes. Synced `AGENTS.md` / existing history safely from `origin/feat/agent-core` before validation.
