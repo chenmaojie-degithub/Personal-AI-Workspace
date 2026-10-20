@@ -114,7 +114,11 @@ class PersistenceTests(unittest.TestCase):
             response("done", LLMUsage(30, 7, 37)),
         )
 
-        self.post_chat(provider, "search", web_search=True)
+        with patch("app.tools.web_search.search_web", return_value=[
+            {"title": "Example", "url": "https://example.com", "snippet": "Offline evidence"},
+        ]) as search:
+            self.post_chat(provider, "search", web_search=True)
+        search.assert_called_once_with("test")
 
         self.assertEqual(self.client.get("/usage/summary").json()["total_tokens"], 62)
 
