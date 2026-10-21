@@ -222,7 +222,12 @@ def run_agent(req: ChatRequest) -> Iterator[AgentEvent]:
     emitted_sources = 0
     charts: list[ChartArtifact] = []
 
-    create_agent_run(run_id, session_id, workspace_id, goal)
+    try:
+        create_agent_run(run_id, session_id, workspace_id, goal)
+    except ValueError as exc:
+        # No Run exists yet: preserve the normal error protocol instead of breaking SSE.
+        yield "error", {"message": str(exc)}
+        return
     initial_metrics_event = metrics_event()
     with _cancel_lock:
         _cancel_events[run_id] = Event()

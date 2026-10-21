@@ -2,6 +2,11 @@
 
 Maintain a concise, factual record for changes on the active feature branch. Link to the exact commit/acceptance report, distinguish mock/replay vs live tests, and list known limits. Do not describe unverified behavior as complete.
 
+## 2026-10-21 — Integration acceptance: Agent initialization error
+
+- Reproduced a missing-Workspace Agent request over actual loopback HTTP: initialization raised outside the Agent error protocol, truncating SSE with `RemoteProtocolError`; ordinary Chat already returned an error event. Added a narrow ValueError guard around initial Run creation, returning the existing structured error without creating a Run, calling a Provider or saving messages. No schema change or Agent-loop refactor.
+- Verification: missing-Workspace regression plus existing Evaluation suite **19 passed**; actual HTTP verified ordinary/Agent requests on sync/SSE paths (**4 cases**). Uses a new disposable offline harness with temporary SQLite/Chroma, no `.env` credentials or user PostgreSQL. Full integration/browser acceptance follows separately.
+
 ## 2026-10-21 — Memory V1.1 management and lifecycle
 
 - Added a Settings Memory card reusing Workspace state and the V1 APIs: list key/value/update time/version, explicit create/edit confirmation, versioned edits, delete confirmation, conflict draft retention with explicit latest-version reload, and clear disabled/unavailable/network messages. Scoped request epochs, per-list sequences and AbortControllers prevent stale reads/writes/errors (including A→B→A) from leaking across Workspaces; no full memory content in localStorage, no automatic enabling or retries.
