@@ -2,6 +2,11 @@
 
 Maintain a concise, factual record for changes on the active feature branch. Link to the exact commit/acceptance report, distinguish mock/replay vs live tests, and list known limits. Do not describe unverified behavior as complete.
 
+## 2026-10-21 — Integration acceptance: ASGI disconnect cleanup
+
+- Actual TCP disconnect reproduced an unfinished Agent Run (`replanning`, metrics unfinished) after the client closed SSE; no partial message was saved. Starlette's cancelled async iteration did not reliably close the underlying synchronous router/Agent generators. Added explicit nested generator closure and shielded threadpool cleanup at the existing SSE boundary; no new chat flow or schema changes.
+- Verification: **29 targeted tests** (initialization/iterator cleanup + Observability + Streaming); disposable FastAPI HTTP suite **17/17 passed**, including actual TCP close → cancelled Run, explicit cancel, Provider timeout/failure, invalid citations, budget, Workspace/Session/document isolation, real temporary Chroma retrieval, Memory transitions and persistence. Real providers remain mocked and external-network attempts were zero.
+
 ## 2026-10-21 — Integration acceptance: Agent initialization error
 
 - Reproduced a missing-Workspace Agent request over actual loopback HTTP: initialization raised outside the Agent error protocol, truncating SSE with `RemoteProtocolError`; ordinary Chat already returned an error event. Added a narrow ValueError guard around initial Run creation, returning the existing structured error without creating a Run, calling a Provider or saving messages. No schema change or Agent-loop refactor.

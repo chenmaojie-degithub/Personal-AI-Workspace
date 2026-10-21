@@ -1,5 +1,6 @@
 """Initialization error regression: disposable SQLite and no model calls."""
 import json
+import asyncio
 
 from fastapi.testclient import TestClient
 import pytest
@@ -7,6 +8,8 @@ import pytest
 from app.core import database
 from app.core.config import settings
 from app.main import create_app
+from app.models.chat import ChatRequest
+from app.api.routes import chat_stream
 
 
 @pytest.mark.parametrize("streaming", [False, True])
@@ -35,3 +38,29 @@ def test_missing_workspace_has_structured_error_without_partial_run(tmp_path, mo
     assert calls == []
     assert database.list_messages("invalid-workspace") == []
     assert database.latest_agent_run("invalid-workspace", "synthetic-missing") is None
+
+
+@pytest.mark.parametrize("mode", ["complete", "close", "error"])
+def test_asgi_iterator_cleanup_is_explicit_on_all_exits(monkeypatch, mode):
+    closed = []
+    def source():
+        try:
+            yield "one"
+            if mode == "error":
+                raise RuntimeError("Synthetic failure")
+            yield "two"
+        finally:
+            closed.append(True)
+    monkeypatch.setattr(chat_stream, "_routed_events", lambda _: source())
+    async def consume():
+        events = chat_stream._stream_with_cleanup(ChatRequest(messages=[{"role": "user", "content": "hello"}]))
+        assert await anext(events) == "one"
+        if mode == "close":
+            await events.aclose()
+        elif mode == "error":
+            with pytest.raises(RuntimeError, match="Synthetic"):
+                await anext(events)
+        else:
+            assert [item async for item in events] == ["two"]
+    asyncio.run(consume())
+    assert closed == [True]

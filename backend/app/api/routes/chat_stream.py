@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from uuid import uuid4
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
+from anyio import CancelScope
+from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 from app.api.routes.chat import (
     _build_system_prompt,
@@ -220,16 +222,28 @@ def _events(req: ChatRequest) -> Iterator[str]:
 
 def _routed_events(req: ChatRequest) -> Iterator[str]:
     if should_run_agent(req):
-        for event, data in run_agent(req):
-            yield _sse(event, data)
+        with closing(run_agent(req)) as events:
+            for event, data in events:
+                yield _sse(event, data)
         return
     yield from _events(req)
+
+
+async def _stream_with_cleanup(req: ChatRequest):
+    events = _routed_events(req)
+    try:
+        async for event in iterate_in_threadpool(events):
+            yield event
+    finally:
+        # ASGI disconnect cancels iteration; shield cleanup after the current next() returns.
+        with CancelScope(shield=True):
+            await run_in_threadpool(events.close)
 
 
 @router.post("/chat/stream")
 def chat_stream(req: ChatRequest) -> StreamingResponse:
     return StreamingResponse(
-        _routed_events(req),
+        _stream_with_cleanup(req),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
