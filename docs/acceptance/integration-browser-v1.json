@@ -1,0 +1,49 @@
+{
+  "runtime_revision": "e5bd76ec51d13a204ac163b0a42edbbef0e1e904",
+  "mode": "backend verification after real browser HTTP actions",
+  "stop": {
+    "status": "cancelled",
+    "failure_type": "user_cancelled",
+    "metrics_finished": true,
+    "saved_messages": 0,
+    "model_calls": 6,
+    "usage": null,
+    "duration_ms": 4422.0,
+    "ttft_ms": 547.0
+  },
+  "timeout_error": {
+    "status": "failed",
+    "failure_type": "TimeoutError",
+    "metrics_finished": true,
+    "saved_messages": 0,
+    "model_calls": 1,
+    "usage": null,
+    "duration_ms": 32.0,
+    "ttft_ms": null
+  },
+  "completed_agent": {
+    "status": "completed",
+    "failure_type": null,
+    "metrics_finished": true,
+    "saved_messages": 2,
+    "model_calls": 6,
+    "usage": {
+      "prompt_tokens": 45,
+      "completion_tokens": 11,
+      "total_tokens": 56
+    },
+    "duration_ms": 531.0,
+    "ttft_ms": 203.0
+  },
+  "memory_crud_and_new_session_values": true,
+  "simple_turn_tokens_persisted": 6,
+  "history_exposes_message_usage": false,
+  "harness_state": {
+    "marker": "paw-integration-offline-v1",
+    "database": "temporary-sqlite",
+    "provider_calls": 64,
+    "web_calls": 14,
+    "blocked_network_attempts": 0,
+    "memory_enabled": true
+  }
+}

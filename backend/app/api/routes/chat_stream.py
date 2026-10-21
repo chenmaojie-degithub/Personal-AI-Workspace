@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator
-from contextlib import ExitStack, closing
+from contextlib import ExitStack
 from uuid import uuid4
 
 from fastapi import APIRouter
@@ -222,7 +222,11 @@ def _events(req: ChatRequest) -> Iterator[str]:
 
 def _routed_events(req: ChatRequest) -> Iterator[str]:
     if should_run_agent(req):
-        with closing(run_agent(req)) as events:
+        with ExitStack() as cleanup:
+            events = run_agent(req)
+            close = getattr(events, "close", None)
+            if callable(close):
+                cleanup.callback(close)
             for event, data in events:
                 yield _sse(event, data)
         return
@@ -236,8 +240,10 @@ async def _stream_with_cleanup(req: ChatRequest):
             yield event
     finally:
         # ASGI disconnect cancels iteration; shield cleanup after the current next() returns.
-        with CancelScope(shield=True):
-            await run_in_threadpool(events.close)
+        close = getattr(events, "close", None)
+        if callable(close):
+            with CancelScope(shield=True):
+                await run_in_threadpool(close)
 
 
 @router.post("/chat/stream")

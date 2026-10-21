@@ -2,6 +2,19 @@
 
 Maintain a concise, factual record for changes on the active feature branch. Link to the exact commit/acceptance report, distinguish mock/replay vs live tests, and list known limits. Do not describe unverified behavior as complete.
 
+## 2026-10-21 — Iterator cleanup compatibility (local PASS, CI pending)
+
+- Replaced unconditional `contextlib.closing` at the Agent SSE boundary with the existing ExitStack pattern, registering only callable `close` methods. The ASGI cleanup boundary applies the same guard and retains cancellation shielding. Plain iterators/noncallable attributes are accepted; real generator cleanup failures propagate without suppression.
+- Fixed regression-test ownership of error expectations: the shared consumer propagates errors, while each test asserts iteration vs cleanup failure. Simultaneous failures retain the original ValueError in the cleanup RuntimeError's context. Existing legacy list-iterator Mock remains unchanged.
+- Verification: original **2 failures now pass**; related SSE/Agent/Observability **77 passed**; full backend **227 passed, 65 subtests passed**; frontend typecheck, **10 Memory tests** and build passed. Actual loopback HTTP **17/17 passed** again, including TCP disconnect and cancel → terminal cancelled Runs, finished metrics and no partial messages. No real LLM/Exa/Embedding calls or user PostgreSQL/schema changes.
+- Added the existing isolated HTTP harnesses and synthetic acceptance evidence to the scoped deliverable; retained previous HTTP/browser evidence and wrote the new HTTP results separately. Report: `docs/acceptance/integration-acceptance-v1.md`. CI has not yet verified this patch; the scoped acceptance conclusion stays pending. P2 Token-badge refresh and PostgreSQL/live-provider limits remain.
+
+## 2026-10-21 — Integration acceptance checkpoint (prior CI BLOCKED)
+
+- Actual HTTP suite **17/17 passed** against isolated FastAPI/SQLite/Chroma; actual Vue browser verified Workspace/Session, ordinary chat, SSE, Agent/Web/RAG Sources, Memory CRUD/new-session values, refresh, Stop and timeout UI. Post-browser storage verification confirms cancelled/failed Runs save no partial messages, completed metrics/Sources persist, and Provider/Search/Embedding remain offline.
+- **CI FAIL on e5bd76e:** 201 backend tests passed, 1 failed, 65 subtests passed; legacy route test supplies a list_iterator without close(), incompatible with new contextlib.closing. Frontend CI passed typecheck, 10 Memory tests and build. Stopped further code changes/commits per AGENTS.md; minimal iterator compatibility follow-up and final full regression remain pending.
+- Observed P2: per-message Token badge does not restore on refresh, although token_usage and Agent metrics persist. PostgreSQL recovery/migration remains BLOCKED from prior permission evidence; no connection or live provider calls this round. Local checkpoint/report and replay artifacts: `docs/acceptance/integration-acceptance-v1.md`; not yet a completed/committed acceptance deliverable.
+
 ## 2026-10-21 — Integration acceptance: ASGI disconnect cleanup
 
 - Actual TCP disconnect reproduced an unfinished Agent Run (`replanning`, metrics unfinished) after the client closed SSE; no partial message was saved. Starlette's cancelled async iteration did not reliably close the underlying synchronous router/Agent generators. Added explicit nested generator closure and shielded threadpool cleanup at the existing SSE boundary; no new chat flow or schema changes.

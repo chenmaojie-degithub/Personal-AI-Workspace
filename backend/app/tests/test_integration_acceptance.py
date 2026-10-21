@@ -40,27 +40,105 @@ def test_missing_workspace_has_structured_error_without_partial_run(tmp_path, mo
     assert database.latest_agent_run("invalid-workspace", "synthetic-missing") is None
 
 
-@pytest.mark.parametrize("mode", ["complete", "close", "error"])
-def test_asgi_iterator_cleanup_is_explicit_on_all_exits(monkeypatch, mode):
-    closed = []
-    def source():
-        try:
-            yield "one"
-            if mode == "error":
-                raise RuntimeError("Synthetic failure")
-            yield "two"
-        finally:
-            closed.append(True)
-    monkeypatch.setattr(chat_stream, "_routed_events", lambda _: source())
+def consume_events(monkeypatch, source, layer, mode):
+    """Exercise the real routing or ASGI boundary with the same iterator contract."""
+    request = ChatRequest(messages=[{"role": "user", "content": "hello"}])
+    if layer == "routed":
+        monkeypatch.setattr(chat_stream, "should_run_agent", lambda _: True)
+        monkeypatch.setattr(chat_stream, "run_agent", lambda _: source)
+        events = chat_stream._routed_events(request)
+        assert next(events).startswith("event: message")
+        if mode == "close":
+            events.close()
+        elif mode == "error":
+            next(events)
+        else:
+            assert len(list(events)) == 1
+        return
+
+    monkeypatch.setattr(chat_stream, "_routed_events", lambda _: source)
     async def consume():
-        events = chat_stream._stream_with_cleanup(ChatRequest(messages=[{"role": "user", "content": "hello"}]))
-        assert await anext(events) == "one"
+        events = chat_stream._stream_with_cleanup(request)
+        assert await anext(events) == ("message", {"content": "one"})
         if mode == "close":
             await events.aclose()
         elif mode == "error":
-            with pytest.raises(RuntimeError, match="Synthetic"):
-                await anext(events)
+            await anext(events)
         else:
-            assert [item async for item in events] == ["two"]
+            assert [item async for item in events] == [("message", {"content": "two"})]
     asyncio.run(consume())
+
+
+@pytest.mark.parametrize("layer", ["routed", "asgi"])
+@pytest.mark.parametrize("mode", ["complete", "close", "error"])
+def test_iterator_cleanup_is_explicit_on_all_exits(monkeypatch, layer, mode):
+    closed = []
+    def source():
+        try:
+            yield "message", {"content": "one"}
+            if mode == "error":
+                raise RuntimeError("Synthetic failure")
+            yield "message", {"content": "two"}
+        finally:
+            closed.append(True)
+    if mode == "error":
+        with pytest.raises(RuntimeError, match="Synthetic failure"):
+            consume_events(monkeypatch, source(), layer, mode)
+    else:
+        consume_events(monkeypatch, source(), layer, mode)
     assert closed == [True]
+
+
+@pytest.mark.parametrize("layer", ["routed", "asgi"])
+@pytest.mark.parametrize("mode", ["complete", "close"])
+def test_plain_list_iterator_needs_no_close(monkeypatch, layer, mode):
+    consume_events(monkeypatch, iter([
+        ("message", {"content": "one"}), ("message", {"content": "two"}),
+    ]), layer, mode)
+
+
+@pytest.mark.parametrize("layer", ["routed", "asgi"])
+@pytest.mark.parametrize("close_attribute", [None, "not callable"])
+@pytest.mark.parametrize("mode", ["complete", "close", "error"])
+def test_noncallable_close_is_ignored(monkeypatch, layer, close_attribute, mode):
+    class Iterator:
+        close = close_attribute
+
+        def __init__(self):
+            self.items = iter([("message", {"content": "one"}), ("message", {"content": "two"})])
+            self.started = False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self.started and mode == "error":
+                raise RuntimeError("Synthetic failure")
+            self.started = True
+            return next(self.items)
+
+    if mode == "error":
+        with pytest.raises(RuntimeError, match="Synthetic failure"):
+            consume_events(monkeypatch, Iterator(), layer, mode)
+    else:
+        consume_events(monkeypatch, Iterator(), layer, mode)
+
+
+@pytest.mark.parametrize("layer", ["routed", "asgi"])
+@pytest.mark.parametrize("mode", ["complete", "close", "error"])
+def test_generator_cleanup_errors_are_not_swallowed(monkeypatch, layer, mode):
+    def source():
+        try:
+            yield "message", {"content": "one"}
+            if mode == "error":
+                raise ValueError("Iteration failed first")
+            yield "message", {"content": "two"}
+        finally:
+            raise RuntimeError("Cleanup failed")
+
+    # Closing a real generator must surface its finally error on every exit path.
+    with pytest.raises(RuntimeError, match="Cleanup failed") as error:
+        consume_events(monkeypatch, source(), layer, mode)
+    if mode == "error":
+        assert isinstance(error.value.__context__, ValueError)
+        assert str(error.value.__context__) == "Iteration failed first"
