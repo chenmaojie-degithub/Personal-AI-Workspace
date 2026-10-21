@@ -1,0 +1,451 @@
+{
+  "generated_at_utc": "2026-10-21T01:23:37.299356+00:00",
+  "mode": "real loopback HTTP, actual FastAPI/SQLite/Chroma, Mock Provider/Embedding/Web",
+  "scenarios": [
+    {
+      "id": "simple_sync",
+      "status": "PASS",
+      "model_calls": 1
+    },
+    {
+      "id": "simple_sse",
+      "status": "PASS",
+      "event_counts": {
+        "message": 7,
+        "usage": 1,
+        "done": 1
+      },
+      "event_prefix": [
+        "message",
+        "message",
+        "message",
+        "message",
+        "message",
+        "message",
+        "message",
+        "usage"
+      ],
+      "event_suffix": [
+        "message",
+        "message",
+        "usage",
+        "done"
+      ],
+      "duration_ms": 94.0,
+      "ttft_ms": 15.0
+    },
+    {
+      "id": "session_workspace_isolation",
+      "status": "PASS",
+      "event_counts": {
+        "error": 1
+      },
+      "event_prefix": [
+        "error"
+      ],
+      "event_suffix": [
+        "error"
+      ]
+    },
+    {
+      "id": "document_workspace_isolation",
+      "status": "PASS",
+      "indexed_document": "27badb65-cf89-4fc4-988d-735abe9ca555",
+      "event_counts": {
+        "agent_run": 1,
+        "agent_metrics": 2,
+        "agent_status": 1,
+        "error": 1
+      },
+      "event_prefix": [
+        "agent_run",
+        "agent_metrics",
+        "agent_metrics",
+        "agent_status",
+        "error"
+      ],
+      "event_suffix": [
+        "agent_metrics",
+        "agent_metrics",
+        "agent_status",
+        "error"
+      ]
+    },
+    {
+      "id": "agent_rag_web_citations_metrics",
+      "status": "PASS",
+      "run_status": "completed",
+      "model_calls": 6,
+      "usage": {
+        "prompt_tokens": 45,
+        "completion_tokens": 11,
+        "total_tokens": 56
+      },
+      "source_types": [
+        "web",
+        "knowledge"
+      ],
+      "event_counts": {
+        "agent_run": 1,
+        "agent_metrics": 6,
+        "agent_plan": 4,
+        "agent_status": 7,
+        "agent_step": 6,
+        "agent_observation": 3,
+        "tool_call": 3,
+        "source": 2,
+        "message": 21,
+        "usage": 1,
+        "done": 1
+      },
+      "event_prefix": [
+        "agent_run",
+        "agent_metrics",
+        "agent_plan",
+        "agent_metrics",
+        "agent_status",
+        "agent_plan",
+        "agent_step",
+        "agent_step"
+      ],
+      "event_suffix": [
+        "usage",
+        "agent_metrics",
+        "agent_status",
+        "done"
+      ],
+      "duration_ms": 515.0,
+      "ttft_ms": 172.0
+    },
+    {
+      "id": "memory_update_cross_session",
+      "status": "PASS",
+      "new_version": 2,
+      "event_counts": {
+        "message": 11,
+        "usage": 1,
+        "done": 1
+      },
+      "event_prefix": [
+        "message",
+        "message",
+        "message",
+        "message",
+        "message",
+        "message",
+        "message",
+        "message"
+      ],
+      "event_suffix": [
+        "message",
+        "message",
+        "usage",
+        "done"
+      ]
+    },
+    {
+      "id": "memory_off_and_deleted",
+      "status": "PASS",
+      "event_counts": {
+        "message": 7,
+        "usage": 1,
+        "done": 1
+      },
+      "event_prefix": [
+        "message",
+        "message",
+        "message",
+        "message",
+        "message",
+        "message",
+        "message",
+        "usage"
+      ],
+      "event_suffix": [
+        "message",
+        "message",
+        "usage",
+        "done"
+      ]
+    },
+    {
+      "id": "disabled_tool_not_executed",
+      "status": "PASS",
+      "web_executions": 0,
+      "event_counts": {
+        "agent_run": 1,
+        "agent_metrics": 6,
+        "agent_plan": 4,
+        "agent_status": 7,
+        "agent_step": 6,
+        "agent_observation": 3,
+        "tool_call": 3,
+        "message": 7,
+        "usage": 1,
+        "done": 1
+      },
+      "event_prefix": [
+        "agent_run",
+        "agent_metrics",
+        "agent_plan",
+        "agent_metrics",
+        "agent_status",
+        "agent_plan",
+        "agent_step",
+        "agent_step"
+      ],
+      "event_suffix": [
+        "usage",
+        "agent_metrics",
+        "agent_status",
+        "done"
+      ]
+    },
+    {
+      "id": "failure",
+      "status": "PASS",
+      "failure_type": "RuntimeError",
+      "event_counts": {
+        "agent_run": 1,
+        "agent_metrics": 2,
+        "agent_status": 1,
+        "error": 1
+      },
+      "event_prefix": [
+        "agent_run",
+        "agent_metrics",
+        "agent_metrics",
+        "agent_status",
+        "error"
+      ],
+      "event_suffix": [
+        "agent_metrics",
+        "agent_metrics",
+        "agent_status",
+        "error"
+      ],
+      "duration_ms": 47.0,
+      "ttft_ms": null
+    },
+    {
+      "id": "timeout",
+      "status": "PASS",
+      "failure_type": "TimeoutError",
+      "event_counts": {
+        "agent_run": 1,
+        "agent_metrics": 2,
+        "agent_status": 1,
+        "error": 1
+      },
+      "event_prefix": [
+        "agent_run",
+        "agent_metrics",
+        "agent_metrics",
+        "agent_status",
+        "error"
+      ],
+      "event_suffix": [
+        "agent_metrics",
+        "agent_metrics",
+        "agent_status",
+        "error"
+      ],
+      "duration_ms": 47.0,
+      "ttft_ms": null
+    },
+    {
+      "id": "invalid-citation",
+      "status": "PASS",
+      "failure_type": "CitationError",
+      "event_counts": {
+        "agent_run": 1,
+        "agent_metrics": 6,
+        "agent_plan": 4,
+        "agent_status": 7,
+        "agent_step": 6,
+        "agent_observation": 3,
+        "tool_call": 3,
+        "source": 2,
+        "message": 21,
+        "error": 1
+      },
+      "event_prefix": [
+        "agent_run",
+        "agent_metrics",
+        "agent_plan",
+        "agent_metrics",
+        "agent_status",
+        "agent_plan",
+        "agent_step",
+        "agent_step"
+      ],
+      "event_suffix": [
+        "message",
+        "agent_metrics",
+        "agent_status",
+        "error"
+      ],
+      "duration_ms": 547.0,
+      "ttft_ms": 187.0
+    },
+    {
+      "id": "provider-disconnect",
+      "status": "PASS",
+      "failure_type": "RuntimeError",
+      "event_counts": {
+        "agent_run": 1,
+        "agent_metrics": 6,
+        "agent_plan": 4,
+        "agent_status": 7,
+        "agent_step": 6,
+        "agent_observation": 3,
+        "tool_call": 3,
+        "source": 2,
+        "message": 21,
+        "error": 1
+      },
+      "event_prefix": [
+        "agent_run",
+        "agent_metrics",
+        "agent_plan",
+        "agent_metrics",
+        "agent_status",
+        "agent_plan",
+        "agent_step",
+        "agent_step"
+      ],
+      "event_suffix": [
+        "message",
+        "agent_metrics",
+        "agent_status",
+        "error"
+      ],
+      "duration_ms": 500.0,
+      "ttft_ms": 156.0
+    },
+    {
+      "id": "token_budget",
+      "status": "PASS",
+      "run_status": "budget_exceeded",
+      "event_counts": {
+        "agent_run": 1,
+        "agent_metrics": 3,
+        "agent_plan": 1,
+        "message": 1,
+        "usage": 1,
+        "agent_status": 1,
+        "done": 1
+      },
+      "event_prefix": [
+        "agent_run",
+        "agent_metrics",
+        "agent_plan",
+        "agent_metrics",
+        "message",
+        "usage",
+        "agent_metrics",
+        "agent_status"
+      ],
+      "event_suffix": [
+        "usage",
+        "agent_metrics",
+        "agent_status",
+        "done"
+      ]
+    },
+    {
+      "id": "explicit_cancel",
+      "status": "PASS",
+      "run_status": "cancelled",
+      "event_counts": {
+        "agent_run": 1,
+        "agent_metrics": 6,
+        "agent_plan": 4,
+        "agent_status": 7,
+        "agent_step": 6,
+        "agent_observation": 3,
+        "tool_call": 3,
+        "source": 2,
+        "message": 1
+      },
+      "event_prefix": [
+        "agent_run",
+        "agent_metrics",
+        "agent_plan",
+        "agent_metrics",
+        "agent_status",
+        "agent_plan",
+        "agent_step",
+        "agent_step"
+      ],
+      "event_suffix": [
+        "source",
+        "message",
+        "agent_metrics",
+        "agent_status"
+      ],
+      "duration_ms": 844.0,
+      "ttft_ms": 485.0
+    },
+    {
+      "id": "tcp_client_disconnect",
+      "status": "PASS",
+      "run_status": "cancelled",
+      "event_counts": {
+        "agent_run": 1,
+        "agent_metrics": 5,
+        "agent_plan": 4,
+        "agent_status": 6,
+        "agent_step": 6,
+        "agent_observation": 3,
+        "tool_call": 3,
+        "source": 2,
+        "message": 1
+      },
+      "event_prefix": [
+        "agent_run",
+        "agent_metrics",
+        "agent_plan",
+        "agent_metrics",
+        "agent_status",
+        "agent_plan",
+        "agent_step",
+        "agent_step"
+      ],
+      "event_suffix": [
+        "agent_status",
+        "source",
+        "source",
+        "message"
+      ],
+      "duration_ms": 468.0,
+      "ttft_ms": 468.0
+    },
+    {
+      "id": "repeated_post_contract",
+      "status": "PASS",
+      "saved_turns": 2,
+      "note": "Two successful POSTs are two turns, not server-side idempotency"
+    },
+    {
+      "id": "missing_workspace_fixed",
+      "status": "PASS",
+      "saved_messages": 0
+    }
+  ],
+  "summary": {
+    "passed": 17,
+    "total": 17,
+    "external_api_calls": 0
+  },
+  "harness_state": {
+    "marker": "paw-integration-offline-v1",
+    "database": "temporary-sqlite",
+    "provider_calls": 47,
+    "web_calls": 10,
+    "blocked_network_attempts": 0,
+    "memory_enabled": true
+  },
+  "workspace_a": "7e54cca8-7d7a-454c-950d-3317b9753089",
+  "workspace_b": "d512d6f1-06a5-43e5-8f4b-20321a6906c9"
+}

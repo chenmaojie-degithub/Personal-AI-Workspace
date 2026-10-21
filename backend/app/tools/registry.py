@@ -8,6 +8,7 @@ from app.models.chat import ChatSettings
 from app.services.data_analysis import CHART_TYPES, OPERATIONS
 from app.tools.data_analysis import analyze_data
 from app.tools.image_generation import generate_image
+from app.tools.knowledge import read_document, search_knowledge
 from app.tools.web_search import web_search
 
 
@@ -104,6 +105,67 @@ def get_enabled_tool_specs(settings: ChatSettings, workspace_id: str | None = No
     return specs
 
 
+def get_agent_tool_specs(
+    settings: ChatSettings,
+    session_id: str,
+    workspace_id: str | None = None,
+    document_ids: list[str] | None = None,
+) -> list[ToolSpec]:
+    specs = get_enabled_tool_specs(settings, workspace_id)
+    allowed_documents = set(document_ids) if document_ids else None
+
+    def ensure_allowed(document_id: str | None) -> None:
+        if allowed_documents is not None and document_id is not None and document_id not in allowed_documents:
+            raise ValueError("document_id must be one of the documents associated with this task")
+
+    def scoped_search(**arguments: Any) -> Any:
+        ensure_allowed(arguments.get("document_id"))
+        if allowed_documents is not None and arguments.get("document_id") is None:
+            arguments["document_ids"] = sorted(allowed_documents)
+        return search_knowledge(session_id, workspace_id, **arguments)
+
+    def scoped_read(**arguments: Any) -> Any:
+        ensure_allowed(arguments.get("document_id"))
+        return read_document(session_id, workspace_id, **arguments)
+
+    specs.extend([
+        ToolSpec(
+            name="search_knowledge",
+            description="Search indexed documents in the current Workspace for relevant evidence.",
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "document_id": {"type": ["string", "null"]},
+                    "top_k": {"type": ["integer", "null"], "minimum": 1, "maximum": 10},
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+            handler=scoped_search,
+        ),
+        ToolSpec(
+            name="read_document",
+            description=(
+                "Read the next ordered segment of an indexed document in the current Workspace. "
+                "Continue with next_cursor until complete when whole-document coverage is required."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string"},
+                    "cursor": {"type": ["integer", "null"], "minimum": 0},
+                    "max_chars": {"type": ["integer", "null"], "minimum": 500, "maximum": 12000},
+                },
+                "required": ["document_id"],
+                "additionalProperties": False,
+            },
+            handler=scoped_read,
+        ),
+    ])
+    return specs
+
+
 def execute_tool_call(tool_map: dict[str, ToolSpec], name: str, arguments_json: str) -> Any:
     """
     Execute a tool call safely.
@@ -116,7 +178,10 @@ def execute_tool_call(tool_map: dict[str, ToolSpec], name: str, arguments_json: 
         raise ValueError("Tool arguments must be a JSON object")
     _validate_arguments(tool_map[name].parameters_schema, args)
 
-    return tool_map[name].handler(**args)
+    result = tool_map[name].handler(**args)
+    if isinstance(result, dict) and result.get("error"):
+        raise RuntimeError(str(result["error"]))
+    return result
 
 
 def _validate_arguments(schema: dict[str, Any], args: dict[str, Any]) -> None:
@@ -142,6 +207,6 @@ def _validate_arguments(schema: dict[str, Any], args: dict[str, Any]) -> None:
             raise ValueError(f"Tool argument {name} has an invalid value")
         if isinstance(value, int) and not isinstance(value, bool):
             if "minimum" in rule and value < rule["minimum"]:
-                raise ValueError(f"Tool argument {name} is below the minimum")
+                args[name] = rule["minimum"]
             if "maximum" in rule and value > rule["maximum"]:
-                raise ValueError(f"Tool argument {name} exceeds the maximum")
+                args[name] = rule["maximum"]

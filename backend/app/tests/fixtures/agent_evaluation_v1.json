@@ -1,0 +1,374 @@
+{
+  "suite_version": 1,
+  "cases": [
+    {
+      "id": "simple",
+      "goal": "Explain what a variable is.",
+      "actions": [],
+      "expected_tools": [],
+      "expected_route": "chat",
+      "expected_status": "completed",
+      "expected_catalog": [],
+      "required_citations": [],
+      "answer_sources": [],
+      "expected_rejected_attempts": 0,
+      "expected_repeated_calls": 0,
+      "expected_model_calls": 1,
+      "description": "简单聊天直接流式回答，不额外规划或调用工具。"
+    },
+    {
+      "id": "web",
+      "goal": "Research the latest web release.",
+      "actions": [
+        {
+          "name": "search_web",
+          "arguments": {
+            "query": "offline release"
+          }
+        }
+      ],
+      "expected_tools": [
+        "search_web"
+      ],
+      "expected_route": "agent",
+      "expected_status": "completed",
+      "expected_catalog": [
+        "web:https://example.test/alpha",
+        "web:https://example.test/beta",
+        "web:https://example.test/gamma"
+      ],
+      "required_citations": [
+        "web:https://example.test/gamma"
+      ],
+      "answer_sources": [
+        "web:https://example.test/gamma"
+      ],
+      "expected_rejected_attempts": 0,
+      "expected_repeated_calls": 0,
+      "expected_model_calls": 4,
+      "description": "调用一次网页搜索，回答引用工具提供的 Gamma 来源。"
+    },
+    {
+      "id": "rag",
+      "goal": "Compare facts in the knowledge document.",
+      "actions": [
+        {
+          "name": "search_knowledge",
+          "arguments": {
+            "query": "offline evidence"
+          }
+        }
+      ],
+      "expected_tools": [
+        "search_knowledge"
+      ],
+      "expected_route": "agent",
+      "expected_status": "completed",
+      "expected_catalog": [
+        "knowledge:local-doc:0"
+      ],
+      "required_citations": [
+        "knowledge:local-doc:0"
+      ],
+      "answer_sources": [
+        "knowledge:local-doc:0"
+      ],
+      "expected_rejected_attempts": 0,
+      "expected_repeated_calls": 0,
+      "expected_model_calls": 4,
+      "description": "调用知识检索，引用合成文档 local-doc 的片段 0。"
+    },
+    {
+      "id": "mixed",
+      "goal": "Research and compare web sources with knowledge documents.",
+      "actions": [
+        {
+          "name": "search_web",
+          "arguments": {
+            "query": "offline release"
+          }
+        },
+        {
+          "name": "search_knowledge",
+          "arguments": {
+            "query": "offline evidence"
+          }
+        }
+      ],
+      "expected_tools": [
+        "search_web",
+        "search_knowledge"
+      ],
+      "expected_route": "agent",
+      "expected_status": "completed",
+      "expected_catalog": [
+        "web:https://example.test/alpha",
+        "web:https://example.test/beta",
+        "web:https://example.test/gamma",
+        "knowledge:local-doc:0"
+      ],
+      "required_citations": [
+        "web:https://example.test/gamma",
+        "knowledge:local-doc:0"
+      ],
+      "answer_sources": [
+        "web:https://example.test/gamma",
+        "knowledge:local-doc:0"
+      ],
+      "expected_rejected_attempts": 0,
+      "expected_repeated_calls": 0,
+      "expected_model_calls": 5,
+      "description": "网页与知识混用，来源身份和引用顺序必须正确。"
+    },
+    {
+      "id": "tool_recovery",
+      "goal": "Research the web and compare knowledge evidence after failure.",
+      "actions": [
+        {
+          "name": "search_web",
+          "arguments": {
+            "query": "offline release"
+          }
+        },
+        {
+          "name": "search_knowledge",
+          "arguments": {
+            "query": "offline evidence"
+          }
+        }
+      ],
+      "expected_tools": [
+        "search_web",
+        "search_knowledge"
+      ],
+      "expected_route": "agent",
+      "expected_status": "completed",
+      "expected_catalog": [
+        "knowledge:local-doc:0"
+      ],
+      "required_citations": [
+        "knowledge:local-doc:0"
+      ],
+      "answer_sources": [
+        "knowledge:local-doc:0"
+      ],
+      "expected_rejected_attempts": 0,
+      "expected_repeated_calls": 0,
+      "expected_model_calls": 5,
+      "web_error_once": true,
+      "description": "网页工具故障后继续知识检索，保留失败观察并最终完成。"
+    },
+    {
+      "id": "invalid_tool",
+      "goal": "Research the web and verify with knowledge documents.",
+      "actions": [
+        {
+          "name": "search_web",
+          "arguments": {
+            "query": "offline release",
+            "count": 10
+          }
+        },
+        {
+          "parse_error": "invalid_syntax_or_schema"
+        },
+        {
+          "name": "search_knowledge",
+          "arguments": {
+            "query": "offline evidence"
+          }
+        }
+      ],
+      "expected_tools": [
+        "search_knowledge"
+      ],
+      "expected_route": "agent",
+      "expected_status": "completed",
+      "expected_catalog": [
+        "knowledge:local-doc:0"
+      ],
+      "required_citations": [
+        "knowledge:local-doc:0"
+      ],
+      "answer_sources": [
+        "knowledge:local-doc:0"
+      ],
+      "expected_rejected_attempts": 1,
+      "expected_repeated_calls": 0,
+      "expected_model_calls": 6,
+      "description": "额外参数被真实 Schema 拒绝；注入文本工具格式错误，最多一次受控修复后执行合法工具。"
+    },
+    {
+      "id": "citation_identity",
+      "goal": "Research and compare web and knowledge sources with repeated searches.",
+      "actions": [
+        {
+          "name": "search_web",
+          "arguments": {
+            "query": "offline release"
+          }
+        },
+        {
+          "name": "search_web",
+          "arguments": {
+            "query": "offline release"
+          }
+        },
+        {
+          "name": "search_knowledge",
+          "arguments": {
+            "query": "offline evidence"
+          }
+        }
+      ],
+      "expected_tools": [
+        "search_web",
+        "search_web",
+        "search_knowledge"
+      ],
+      "expected_route": "agent",
+      "expected_status": "completed",
+      "expected_catalog": [
+        "web:https://example.test/alpha",
+        "web:https://example.test/beta",
+        "web:https://example.test/gamma",
+        "knowledge:local-doc:0"
+      ],
+      "required_citations": [
+        "web:https://example.test/gamma",
+        "knowledge:local-doc:0"
+      ],
+      "answer_sources": [
+        "web:https://example.test/gamma",
+        "knowledge:local-doc:0"
+      ],
+      "expected_rejected_attempts": 0,
+      "expected_repeated_calls": 1,
+      "expected_model_calls": 6,
+      "description": "同参数重复搜索一次，重复 URL 不增号，Gamma=3、知识来源=4。"
+    },
+    {
+      "id": "invalid_citation",
+      "goal": "Research the latest web release and compare sources.",
+      "actions": [
+        {
+          "name": "search_web",
+          "arguments": {
+            "query": "offline release"
+          }
+        }
+      ],
+      "expected_tools": [
+        "search_web"
+      ],
+      "expected_route": "agent",
+      "expected_status": "failed",
+      "expected_catalog": [
+        "web:https://example.test/alpha",
+        "web:https://example.test/beta",
+        "web:https://example.test/gamma"
+      ],
+      "required_citations": [],
+      "answer_sources": [],
+      "expected_rejected_attempts": 0,
+      "expected_repeated_calls": 0,
+      "expected_model_calls": 4,
+      "expected_failure_type": "CitationError",
+      "invalid_citation": true,
+      "description": "模型伪造【999】，服务端拦截，不泄露错误编号或保存失败回答。"
+    },
+    {
+      "id": "budget",
+      "goal": "Research the latest web release.",
+      "actions": [
+        {
+          "name": "search_web",
+          "arguments": {
+            "query": "offline release"
+          }
+        }
+      ],
+      "expected_tools": [],
+      "expected_route": "agent",
+      "expected_status": "budget_exceeded",
+      "expected_catalog": [],
+      "required_citations": [],
+      "answer_sources": [],
+      "expected_rejected_attempts": 0,
+      "expected_repeated_calls": 0,
+      "expected_model_calls": 1,
+      "token_budget": 10,
+      "expected_failure_type": "token_budget",
+      "description": "规划消耗固定预算后停止，不启动工具或额外模型调用。"
+    },
+    {
+      "id": "cancel",
+      "goal": "Research and compare the latest web sources.",
+      "actions": [
+        {
+          "name": "search_web",
+          "arguments": {
+            "query": "offline release"
+          }
+        }
+      ],
+      "expected_tools": [
+        "search_web"
+      ],
+      "expected_route": "agent",
+      "expected_status": "cancelled",
+      "expected_catalog": [
+        "web:https://example.test/alpha",
+        "web:https://example.test/beta",
+        "web:https://example.test/gamma"
+      ],
+      "required_citations": [],
+      "answer_sources": [],
+      "expected_rejected_attempts": 0,
+      "expected_repeated_calls": 0,
+      "expected_model_calls": 4,
+      "expected_failure_type": "user_cancelled",
+      "description": "首段文本出现后主动取消，无后续工具且不保存半截回答。"
+    },
+    {
+      "id": "workspace_denied",
+      "goal": "Compare the attached knowledge documents.",
+      "actions": [],
+      "expected_tools": [],
+      "expected_route": "agent",
+      "expected_status": "failed",
+      "expected_catalog": [],
+      "required_citations": [],
+      "answer_sources": [],
+      "expected_rejected_attempts": 0,
+      "expected_repeated_calls": 0,
+      "expected_model_calls": 0,
+      "expected_failure_type": "ValueError",
+      "foreign_document": true,
+      "description": "当前 Workspace 关联另一 Workspace 的文档，真实归属检查在模型/工具前拒绝。"
+    },
+    {
+      "id": "disabled_tool",
+      "goal": "Research the latest web release.",
+      "actions": [
+        {
+          "name": "search_web",
+          "arguments": {
+            "query": "offline release"
+          }
+        }
+      ],
+      "expected_tools": [],
+      "expected_route": "agent",
+      "expected_status": "completed",
+      "expected_catalog": [],
+      "required_citations": [],
+      "answer_sources": [],
+      "expected_rejected_attempts": 1,
+      "expected_repeated_calls": 0,
+      "expected_model_calls": 4,
+      "web_search": false,
+      "description": "Workspace 关闭网页搜索且请求不覆盖设置；模型仍请求搜索时必须拒绝执行。"
+    }
+  ]
+}

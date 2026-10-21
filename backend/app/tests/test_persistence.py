@@ -114,16 +114,20 @@ class PersistenceTests(unittest.TestCase):
             response("done", LLMUsage(30, 7, 37)),
         )
 
-        self.post_chat(provider, "search", web_search=True)
+        with patch("app.tools.web_search.search_web", return_value=[
+            {"title": "Example", "url": "https://example.com", "snippet": "Offline evidence"},
+        ]) as search:
+            self.post_chat(provider, "search", web_search=True)
+        search.assert_called_once_with("test")
 
         self.assertEqual(self.client.get("/usage/summary").json()["total_tokens"], 62)
 
     def test_rag_chat_saves_usage(self) -> None:
         provider = SequenceProvider(response("from document", LLMUsage(40, 8, 48)))
         with patch("app.api.routes.chat._should_use_rag", return_value=True), patch(
-            "app.api.routes.chat.RAGService"
-        ) as rag_service, patch("app.api.routes.chat.create_llm_provider", return_value=provider):
-            rag_service.return_value.retrieve.return_value = [
+            "app.api.routes.chat.get_rag_service"
+        ) as rag_factory, patch("app.api.routes.chat.create_llm_provider", return_value=provider):
+            rag_factory.return_value.retrieve.return_value = [
                 RAGChunk("document text", "note.txt", "doc-1", 0, 0.1)
             ]
             self.client.post("/chat", json={"messages": [{"role": "user", "content": "question"}]})

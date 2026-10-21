@@ -26,6 +26,7 @@ class ChatRequest(BaseModel):
     session_id: str | None = Field(default=None, description="Client-provided or previously returned session id.")
     workspace_id: str | None = None
     model_id: str | None = None
+    document_ids: list[str] = Field(default_factory=list, max_length=20)
     messages: list[ChatMessage] = Field(min_length=1)
     settings: ChatSettings = Field(default_factory=ChatSettings)
 
@@ -38,12 +39,15 @@ class ToolCallLog(BaseModel):
 
 
 class CitationSource(BaseModel):
+    citation_id: int | None = Field(default=None, ge=1)
     type: Literal["knowledge", "web"] = "knowledge"
     title: str | None = None
     url: str | None = None
     filename: str | None = None
     document_id: str | None = None
     chunk_index: int | None = None
+    page_number: int | None = None
+    section: str | None = None
     content_preview: str | None = None
     distance: float | None = None
 
@@ -64,6 +68,7 @@ class ChatResponse(BaseModel):
 
 
 class StoredMessage(BaseModel):
+    sources: list[CitationSource] = Field(default_factory=list)
     session_id: str
     role: Literal["user", "assistant"]
     content: str
@@ -74,6 +79,8 @@ class StoredSession(BaseModel):
     session_id: str
     title: str
     updated_at: str
+    folder_id: str | None = None
+    position: int = 0
 
 
 class SessionTitlePatch(BaseModel):

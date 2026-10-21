@@ -5,8 +5,11 @@ import { Pencil, Plus, Settings } from 'lucide-vue-next'
 import MessageList from '@/components/chat/MessageList.vue'
 import MessageComposer from '@/components/chat/MessageComposer.vue'
 import AttachmentChips from '@/components/chat/AttachmentChips.vue'
+import AgentRunPanel from '@/components/chat/AgentRunPanel.vue'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
 import CapabilitiesCard from '@/components/settings/CapabilitiesCard.vue'
+import DocumentDropZone from '@/components/files/DocumentDropZone.vue'
+import DocumentAssociationZone from '@/components/files/DocumentAssociationZone.vue'
 import { useChat } from '@/lib/chat'
 import type { UiAttachment } from '@/lib/chat'
 import { useWorkspaces } from '@/lib/workspaces'
@@ -61,6 +64,8 @@ const autoScrollArmed = ref(false)
 const uploadStatus = ref<{ kind: 'success' | 'warning' | 'error'; text: string } | null>(null)
 let uploadStatusTimer: number | null = null
 const composerAttachments = ref<UiAttachment[]>([])
+const associatedDocumentIds = ref<string[]>([])
+function setAssociatedDocuments(ids: string[]) { associatedDocumentIds.value = ids }
 
 function setUploadStatus(next: { kind: 'success' | 'warning' | 'error'; text: string } | null) {
   uploadStatus.value = next
@@ -90,13 +95,14 @@ function onSend(text: string) {
   // Snapshot current attachments onto this outgoing user message.
   const attachments = composerAttachments.value.length ? composerAttachments.value.map((a) => ({ ...a })) : undefined
   composerAttachments.value = []
-  void chat.send(text, { attachments })
+  void chat.send(text, { attachments, documentIds: associatedDocumentIds.value })
   void nextTick(() => scrollToLastMessage('auto'))
 }
 
 watch(() => chat.sessionId.value, () => {
   composerRef.value?.setText('')
   composerAttachments.value = []
+  associatedDocumentIds.value = []
   setUploadStatus(null)
   autoScrollArmed.value = true
 })
@@ -194,6 +200,7 @@ async function onUpload(files: File[]) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const s of (data.stored ?? []) as any[]) {
       if (s?.filename) byName.set(String(s.filename), { bytes: s?.bytes, contentType: s?.content_type })
+      if (typeof s?.document_id === 'string' && !associatedDocumentIds.value.includes(s.document_id)) associatedDocumentIds.value.push(s.document_id)
     }
 
     composerAttachments.value = composerAttachments.value.map((a) => {
@@ -243,6 +250,7 @@ async function onUpload(files: File[]) {
 </script>
 
 <template>
+  <DocumentDropZone class="h-full min-h-0" :disabled="isUploading" @files="onUpload" @invalid="(text: string) => setUploadStatus({ kind: 'error', text })">
   <div data-chat-page class="flex h-full min-h-0 flex-col bg-[#0b0d10]">
     <div ref="scrollAreaRef" data-messages-viewport class="min-h-0 flex-1 overflow-y-auto px-4 pt-5 sm:px-6 sm:pt-7" @scroll="onMessagesScroll">
       <div v-if="!hasMessages" class="flex min-h-full items-center justify-center pb-12">
@@ -268,6 +276,7 @@ async function onUpload(files: File[]) {
               aria-label="重命名当前聊天" title="重命名当前聊天" @click="startTitleEdit"><Pencil class="size-3" /></button>
           </template>
         </div>
+        <AgentRunPanel v-if="chat.agentRun.value" :run="chat.agentRun.value" />
         <MessageList :messages="chat.messages.value ?? []" :is-loading="chat.isLoading.value" />
         <div v-if="chat.lastError.value" class="mt-6 rounded-xl border border-red-400/20 bg-red-400/5 p-3 text-sm text-red-300">{{ chat.lastError.value }}</div>
       </div>
@@ -290,6 +299,9 @@ async function onUpload(files: File[]) {
           <template #actions>
             <span v-if="isUploading" class="hidden sm:inline">Uploading...</span>
           </template>
+          <template #center>
+            <DocumentAssociationZone :model-value="associatedDocumentIds" :workspace-id="workspaces.currentId.value" :uploading="isUploading" :agent-run="chat.agentRun.value" @update:model-value="setAssociatedDocuments" @request-upload="triggerFilePicker" />
+          </template>
           <template #before-send>
             <Popover :open="controlsOpen" @update:open="(v: boolean) => (controlsOpen = v)">
               <PopoverTrigger as-child>
@@ -309,6 +321,7 @@ async function onUpload(files: File[]) {
       </div>
     </div>
   </div>
+  </DocumentDropZone>
 </template>
 
 <style scoped>

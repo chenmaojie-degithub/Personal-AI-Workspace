@@ -27,9 +27,11 @@ class KnowledgeBaseTests(unittest.TestCase):
         self.storage_patch = patch.object(settings, "storage_dir", str(root / "storage"))
         self.chroma_patch = patch.object(settings, "chroma_persist_dir", str(root / "chroma"))
         self.collection_patch = patch.object(settings, "chroma_collection", "test_rag_chunks")
+        self.database_patch = patch.object(settings, "database_url", f"sqlite:///{(root / 'business.sqlite3').as_posix()}")
         self.storage_patch.start()
         self.chroma_patch.start()
         self.collection_patch.start()
+        self.database_patch.start()
 
         self.rag = RAGService()
         self.rag._embedding_provider = FakeEmbeddingProvider()
@@ -47,6 +49,7 @@ class KnowledgeBaseTests(unittest.TestCase):
         del self.rag
         gc.collect()
         self.collection_patch.stop()
+        self.database_patch.stop()
         self.chroma_patch.stop()
         self.storage_patch.stop()
         self.temp_dir.cleanup()
@@ -58,14 +61,18 @@ class KnowledgeBaseTests(unittest.TestCase):
         )
         self.assertEqual(upload.status_code, 200)
         session_id = upload.json()["session_id"]
+        document_id = upload.json()["stored"][0]["document_id"]
+        self.assertNotEqual(document_id, "note.txt")
         self.assertEqual(upload.json()["stored"][0]["status"], "indexed")
 
         listing = self.client.get("/files", params={"session_id": session_id})
         item = listing.json()["files"][0]
         self.assertEqual(item["filename"], "note.txt")
+        self.assertEqual(item["document_id"], document_id)
         self.assertEqual(item["status"], "indexed")
         self.assertGreater(item["chunk_count"], 0)
         self.assertEqual(self.rag.file_chunk_counts(session_id)["note.txt"], item["chunk_count"])
+        self.assertEqual(self.rag.retrieve(session_id, "knowledge")[0].document_id, document_id)
 
         deleted = self.client.delete(f"/files/note.txt", params={"session_id": session_id})
         self.assertEqual(deleted.status_code, 200)
@@ -91,6 +98,27 @@ class KnowledgeBaseTests(unittest.TestCase):
         self.assertEqual(item["status"], "failed")
         self.assertEqual(item["chunk_count"], 0)
         self.assertIn("embedding unavailable", item["ingest_error"])
+
+    def test_upload_rejects_unsupported_invalid_and_duplicate_files(self) -> None:
+        unsupported = self.client.post(
+            "/files/upload", files={"files": ("payload.exe", b"binary", "application/octet-stream")},
+        )
+        self.assertEqual(unsupported.status_code, 400)
+
+        fake_pdf = self.client.post(
+            "/files/upload", files={"files": ("fake.pdf", b"not a pdf", "application/pdf")},
+        )
+        self.assertEqual(fake_pdf.status_code, 400)
+
+        first = self.client.post(
+            "/files/upload", files={"files": ("first.txt", b"same content", "text/plain")},
+        )
+        session_id = first.json()["session_id"]
+        duplicate = self.client.post(
+            "/files/upload", data={"session_id": session_id},
+            files={"files": ("second.txt", b"same content", "text/plain")},
+        )
+        self.assertEqual(duplicate.status_code, 409)
 
 
 if __name__ == "__main__":

@@ -30,14 +30,54 @@ export type UiChatMessage = TransportChatMessage & {
 export type ChartArtifact = { url: string; title: string }
 
 export type CitationSource = {
+  citation_id?: number | null
   type: 'knowledge' | 'web'
   title: string | null
   url: string | null
   filename: string | null
   document_id: string | null
   chunk_index: number | null
+  page_number: number | null
+  section: string | null
   content_preview: string | null
   distance: number | null
+}
+
+export type AgentStep = {
+  step_index: number
+  title: string
+  tool_name?: string | null
+  status: string
+  output_preview?: string | null
+  error?: string | null
+  duration_ms?: number | null
+}
+
+export type AgentMetrics = {
+  duration_ms: number
+  ttft_ms: number | null
+  model_call_count: number
+  model_duration_ms: number
+  tool_duration_ms: number
+  usage: LLMUsage | null
+  cost_usd: number | null
+  budget_tokens: number
+  budget_tokens_estimated: boolean
+  failure_stage: string | null
+  failure_type: string | null
+  finished: boolean
+  tools: Array<{ step_index: number; name: string; status: string; duration_ms: number | null; error_type: string | null }>
+  model_calls: Array<{ index: number; stage: string; status: string; duration_ms: number | null; error_type: string | null }>
+}
+
+export type AgentRun = {
+  id: string
+  goal: string
+  status: string
+  plan: Array<{ index: number; title: string; status: string }>
+  steps: AgentStep[]
+  error?: string | null
+  metrics?: AgentMetrics | null
 }
 
 export type LLMUsage = {
@@ -57,6 +97,8 @@ export type StoredSession = {
   session_id: string
   title: string
   updated_at: string
+  folder_id: string | null
+  position: number
 }
 
 export type ToolCallLog = {
@@ -117,6 +159,7 @@ function createChat() {
   const messages = ref<UiChatMessage[]>([])
 
   const toolCalls = ref<ToolCallLog[]>([])
+  const agentRun = ref<AgentRun | null>(null)
   const isLoading = ref(false)
   const isUploading = ref(false)
   const isRestoring = ref(false)
@@ -145,9 +188,10 @@ function createChat() {
       await workspaces.ensureLoaded()
       const res = await fetch(`${apiBaseUrl()}/sessions/${encodeURIComponent(currentSession)}/messages?workspace_id=${encodeURIComponent(workspaces.currentId.value ?? '')}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const history = await res.json() as Array<{ role: 'user' | 'assistant'; content: string }>
+      const history = await res.json() as Array<{ role: 'user' | 'assistant'; content: string; sources?: CitationSource[] }>
       if (version === restoreVersion && sessionId.value === currentSession) {
-        messages.value = history.map(({ role, content }) => ({ role, content }))
+        messages.value = history.map(({ role, content, sources }) => ({ role, content, sources }))
+        await loadAgentRun(currentSession)
       }
     } catch (e) {
       if (version === restoreVersion && sessionId.value === currentSession) {
@@ -156,6 +200,15 @@ function createChat() {
     } finally {
       if (version === restoreVersion) isRestoring.value = false
     }
+  }
+
+  async function loadAgentRun(targetSession = sessionId.value) {
+    const workspaceId = workspaces.currentId.value
+    if (!workspaceId) return
+    try {
+      const response = await fetch(`${apiBaseUrl()}/agent-runs/latest?session_id=${encodeURIComponent(targetSession)}&workspace_id=${encodeURIComponent(workspaceId)}`)
+      if (response.ok && sessionId.value === targetSession) agentRun.value = await response.json() as AgentRun | null
+    } catch { /* Agent history is supplemental to chat restoration. */ }
   }
 
   async function loadSessions() {
@@ -242,12 +295,13 @@ function createChat() {
     }
   }
 
-  async function send(userText: string, opts?: { attachments?: UiAttachment[] }) {
+  async function send(userText: string, opts?: { attachments?: UiAttachment[]; documentIds?: string[] }) {
     if (!userText.trim() || !canSend.value) return
     try { await workspaces.ensureLoaded() } catch { lastError.value = 'Workspace is unavailable'; return }
 
     lastError.value = null
     toolCalls.value = []
+    agentRun.value = null
     isLoading.value = true
 
     messages.value.push({ role: 'user', content: userText, attachments: opts?.attachments })
@@ -267,6 +321,7 @@ function createChat() {
           session_id: sessionId.value,
           workspace_id: workspaces.currentId.value,
           model_id: selectedModelId.value,
+          document_ids: opts?.documentIds ?? [],
           messages: requestMessages,
         }),
       })
@@ -288,12 +343,54 @@ function createChat() {
         if (!event || !raw) return
         const data = JSON.parse(raw)
         if (event === 'message') assistant.content += data.content as string
-        else if (event === 'source') assistant.sources?.push(data as CitationSource)
+        else if (event === 'source') {
+          const source = data as CitationSource
+          const existing = assistant.sources?.find(item => source.citation_id != null
+            ? item.citation_id === source.citation_id
+            : item.type === source.type && (source.type === 'web'
+              ? item.url === source.url
+              : item.document_id === source.document_id && item.chunk_index === source.chunk_index))
+          if (!existing) assistant.sources?.push(source)
+        }
         else if (event === 'chart') {
           const chart = data as ChartArtifact
           assistant.charts?.push({ ...chart, url: new URL(chart.url, apiBaseUrl()).toString() })
         }
         else if (event === 'tool_call') toolCalls.value.push(data as ToolCallLog)
+        else if (event === 'agent_run') {
+          agentRun.value = { id: data.run_id as string, goal: data.goal as string, status: data.status as string, plan: [], steps: [] }
+        }
+        else if (event === 'agent_plan' && agentRun.value) {
+          agentRun.value.plan = data.steps as AgentRun['plan']
+          agentRun.value.status = 'running'
+        }
+        else if (event === 'agent_metrics' && agentRun.value && data.run_id === agentRun.value.id) {
+          agentRun.value.metrics = data.metrics as AgentMetrics
+        }
+        else if (event === 'agent_step' && agentRun.value) {
+          const step: AgentStep = {
+            step_index: data.index as number,
+            title: data.title as string,
+            tool_name: data.tool as string,
+            status: data.status as string,
+            error: data.error as string | undefined,
+          }
+          const index = agentRun.value.steps.findIndex(item => item.step_index === step.step_index)
+          if (index === -1) agentRun.value.steps.push(step)
+          else agentRun.value.steps[index] = step
+        }
+        else if (event === 'agent_observation' && agentRun.value) {
+          const step = agentRun.value.steps.find(item => item.step_index === data.index)
+          if (step) {
+            step.status = data.status as string
+            step.output_preview = data.output_preview as string | undefined
+            step.error = data.error as string | undefined
+          }
+        }
+        else if (event === 'agent_status' && agentRun.value) {
+          agentRun.value.status = data.status as string
+          agentRun.value.error = data.reason as string | null
+        }
         else if (event === 'usage') assistant.usage = data as LLMUsage | null
         else if (event === 'error') throw new Error(data.message as string)
         else if (event === 'done') {
@@ -331,13 +428,19 @@ function createChat() {
   }
 
   function stop() {
+    const runId = agentRun.value?.id
     controller?.abort()
+    if (runId && workspaces.currentId.value) {
+      agentRun.value!.status = 'cancelled'
+      void fetch(`${apiBaseUrl()}/agent-runs/${encodeURIComponent(runId)}/cancel?workspace_id=${encodeURIComponent(workspaces.currentId.value)}`, { method: 'POST' })
+    }
   }
 
   function reset() {
     if (isLoading.value || isRestoring.value) return
     sessionId.value = createSessionId()
     toolCalls.value = []
+    agentRun.value = null
     lastError.value = null
     messages.value = []
   }
@@ -350,6 +453,7 @@ function createChat() {
     sessionId.value = createSessionId()
     messages.value = []
     toolCalls.value = []
+    agentRun.value = null
     lastError.value = null
     selectedModelId.value = workspaces.current.value?.default_model_id ?? null
     await Promise.all([loadModels(), loadSessions()])
@@ -360,6 +464,7 @@ function createChat() {
     sessionId,
     messages,
     toolCalls,
+    agentRun,
     isLoading,
     isUploading,
     isRestoring,
@@ -372,6 +477,7 @@ function createChat() {
     canSend,
     loadModels,
     loadHistory,
+    loadAgentRun,
     loadSessions,
     renameSession,
     deleteSession,

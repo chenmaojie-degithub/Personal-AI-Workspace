@@ -151,7 +151,16 @@ CSV and XLSX files are retained as analysis inputs and are not embedded into Chr
 
 Backend variables are documented in `backend/.env.example`; frontend variables are in `frontend/.env.example`. Copy each example to `.env` and fill only the services you use. Never expose provider keys through `VITE_` variables.
 
-Web Search uses DDGS and does not require `BRAVE_SEARCH_API_KEY`.
+Web Search defaults to Exa: configure `EXA_API_KEY` in `backend/.env` and use
+`SEARCH_PROVIDER=exa`. Requests use `auto`, at most five results, and highlights;
+deep search and automatic retries are not enabled. Restart the backend after
+changing environment variables. Missing or rejected keys produce an explicit
+tool error; Exa never silently falls back to another provider.
+
+To explicitly use the retained key-free DDGS implementation, set
+`SEARCH_PROVIDER=ddgs`. Neither provider requires `BRAVE_SEARCH_API_KEY`.
+Workspace Web Search must be enabled for `search_web` to be registered.
+Search provider tests use mocked HTTP and do not consume Exa credits.
 
 ## Testing
 
@@ -171,7 +180,7 @@ npm run build
 - Data Analysis accepts a Workspace file ID, never a caller controlled path.
 - Analysis operations and chart types use fixed allowlists.
 - File size, row count, and column count are bounded.
-- Web citation URLs are taken from validated DDGS results.
+- Web citation URLs are taken from validated Exa or DDGS results; search results are not stored in ChromaDB.
 - RAG retrieval and deletion filter by Workspace metadata.
 - Assistant Markdown is sanitized with DOMPurify.
 - `.env`, local databases, vector data, uploaded files, generated charts, caches, and build output are ignored by Git.

@@ -2,14 +2,25 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.core.config import settings
-from app.core.database import DEFAULT_WORKSPACE_ID, get_workspace
+from app.core.database import (
+    DEFAULT_WORKSPACE_ID,
+    create_document_record,
+    delete_document_record,
+    find_document_by_hash,
+    find_document_by_name,
+    get_workspace,
+    list_document_records,
+    update_document_record,
+)
 from app.rag.service import RAGService
+from app.services.documents import DocumentValidationError, size_limit, validate_file
 
 router = APIRouter(prefix="/files", tags=["files"])
 _STATUS_FILENAME = ".rag_index_status.json"
@@ -62,60 +73,120 @@ async def upload_files(
     """
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
+    if len(files) > settings.upload_max_files:
+        raise HTTPException(status_code=400, detail=f"A maximum of {settings.upload_max_files} files can be uploaded at once")
 
     sid = session_id or str(uuid4())
 
     session_dir = _workspace_dir(workspace_id) if workspace_id else _session_dir(sid)
     session_dir.mkdir(parents=True, exist_ok=True)
 
-    if workspace_id:
-        names = [os.path.basename(item.filename or "") for item in files]
-        if len(names) != len(set(names)) or any((session_dir / name).exists() for name in names):
-            raise HTTPException(status_code=409, detail="A file with this name already exists in the workspace")
+    names = [os.path.basename(item.filename or "") for item in files]
+    if any(not name or name != (item.filename or "") or name.startswith(".") for name, item in zip(names, files)):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if any(len(name) > 200 for name in names):
+        raise HTTPException(status_code=400, detail="Filename exceeds 200 characters")
+    if len(names) != len(set(names)) or any((session_dir / name).exists() for name in names):
+        raise HTTPException(status_code=409, detail="A file with this name already exists")
+
+    prepared: list[dict] = []
+    created: list[dict] = []
+    temporary_paths: list[Path] = []
+    try:
+        for upload, filename in zip(files, names):
+            limit = size_limit(filename)
+            suffix = Path(filename).suffix.lower()
+            temporary = session_dir / f".{uuid4().hex}.upload{suffix}"
+            temporary_paths.append(temporary)
+            digest = hashlib.sha256()
+            byte_size = 0
+            with temporary.open("wb") as output:
+                while chunk := await upload.read(1024 * 1024):
+                    byte_size += len(chunk)
+                    if byte_size > limit:
+                        raise DocumentValidationError(f"{filename} exceeds the configured size limit")
+                    digest.update(chunk)
+                    output.write(chunk)
+            validated = validate_file(temporary, digest.hexdigest())
+            if find_document_by_hash(validated.content_sha256, workspace_id=workspace_id, session_id=None if workspace_id else sid):
+                raise HTTPException(status_code=409, detail=f"Duplicate document content: {filename}")
+            if any(item["validated"].content_sha256 == validated.content_sha256 for item in prepared):
+                raise HTTPException(status_code=409, detail=f"Duplicate document content in this upload: {filename}")
+            prepared.append({"upload": upload, "filename": filename, "temporary": temporary, "validated": validated})
+
+        for item in prepared:
+            target = session_dir / item["filename"]
+            item["temporary"].replace(target)
+            item["path"] = target
+            validated = item["validated"]
+            record = create_document_record(
+                filename=item["filename"], content_type=validated.content_type,
+                byte_size=validated.byte_size, content_sha256=validated.content_sha256,
+                workspace_id=workspace_id, session_id=sid,
+            )
+            item["record"] = record
+            created.append(item)
+    except HTTPException:
+        for item in created:
+            item["path"].unlink(missing_ok=True)
+            delete_document_record(item["record"]["id"])
+        raise
+    except (DocumentValidationError, OSError, ValueError) as exc:
+        for item in created:
+            item["path"].unlink(missing_ok=True)
+            delete_document_record(item["record"]["id"])
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        for item in created:
+            item["path"].unlink(missing_ok=True)
+            delete_document_record(item["record"]["id"])
+        raise
+    finally:
+        for temporary in temporary_paths:
+            temporary.unlink(missing_ok=True)
 
     saved: list[dict] = []
-    saved_paths: list[Path] = []
-    for f in files:
-        filename = os.path.basename(f.filename or "")
-        if not filename:
-            raise HTTPException(status_code=400, detail="File missing filename")
+    errors: list[str] = []
+    rag = RAGService()
+    for item in created:
+        validated = item["validated"]
+        record = item["record"]
+        status = "ready" if validated.analysis_ready else "parsing"
+        chunks = 0
+        error: str | None = None
+        try:
+            if validated.analysis_ready:
+                update_document_record(record["id"], status="ready")
+            else:
+                update_document_record(record["id"], status="parsing")
+                summary = rag.ingest_files(
+                    session_id=sid, file_paths=[item["path"]], workspace_id=workspace_id,
+                    document_metadata={item["filename"]: {
+                        "document_id": record["id"], "content_type": validated.content_type,
+                        "content_sha256": validated.content_sha256, "schema_version": 1,
+                    }},
+                )
+                chunks = int(summary.get("stored", 0))
+                status = "indexed"
+                update_document_record(record["id"], status=status, chunk_count=chunks)
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            errors.append(f"{item['filename']}: {error}")
+            status = "failed"
+            update_document_record(record["id"], status=status, error=error)
+        saved.append({
+            "file_id": record["id"], "document_id": record["id"], "filename": item["filename"],
+            "bytes": validated.byte_size, "content_type": validated.content_type,
+            "analysis_ready": validated.analysis_ready, "status": status,
+            "chunk_count": chunks, "ingest_error": error,
+        })
 
-        # Minimal validation (expand later)
-        if len(filename) > 200:
-            raise HTTPException(status_code=400, detail=f"Filename too long: {filename}")
-
-        target = session_dir / filename
-        content = await f.read()
-        target.write_bytes(content)
-        saved_paths.append(target)
-
-        saved.append(
-            {
-                "file_id": filename,
-                "filename": filename,
-                "bytes": len(content),
-                "content_type": f.content_type,
-                "analysis_ready": target.suffix.lower() in {".csv", ".xlsx"},
-            }
-        )
-
-    ingest_summary: dict | None = None
-    ingest_error: str | None = None
-    try:
-        rag_paths = [path for path in saved_paths if path.suffix.lower() not in {".csv", ".xlsx"}]
-        if rag_paths:
-            rag = RAGService()
-            ingest_summary = (
-                rag.ingest_files(session_id=sid, file_paths=rag_paths, workspace_id=workspace_id)
-                if workspace_id else rag.ingest_files(session_id=sid, file_paths=rag_paths)
-            )
-    except Exception as e:
-        ingest_error = f"{type(e).__name__}: {e}"
+    ingest_error = "; ".join(errors) or None
+    ingest_summary = {"stored": sum(item["chunk_count"] for item in saved)}
 
     status = _load_status(session_dir)
     for item in saved:
-        status[item["filename"]] = {"ingest_error": ingest_error}
-        item["status"] = "failed" if ingest_error else "indexed"
+        status[item["filename"]] = {"ingest_error": item["ingest_error"]}
     _save_status(session_dir, status)
 
     return {
@@ -142,20 +213,26 @@ def list_files(session_id: str | None = None, workspace_id: str | None = None) -
             return []
         chunk_counts = rag.file_chunk_counts(sid, workspace_id=wid) if wid else rag.file_chunk_counts(sid)
         status = _load_status(directory)
+        records = list_document_records(workspace_id=wid, session_id=None if wid else sid)
+        by_name = {item["filename"]: item for item in records}
         return [
         {
+            "document_id": by_name.get(p.name, {}).get("id"),
             "filename": p.name,
             "session_id": None if wid else sid,
             "bytes": p.stat().st_size,
-            "status": (
+            "content_type": by_name.get(p.name, {}).get("content_type"),
+            "content_sha256": by_name.get(p.name, {}).get("content_sha256"),
+            "created_at": by_name.get(p.name, {}).get("created_at"),
+            "status": by_name.get(p.name, {}).get("status") or (
                 "indexed"
                 if chunk_counts.get(p.name, 0) > 0
                 else "failed"
                 if status.get(p.name, {}).get("ingest_error")
                 else "not_indexed"
             ),
-            "chunk_count": chunk_counts.get(p.name, 0),
-            "ingest_error": status.get(p.name, {}).get("ingest_error"),
+            "chunk_count": by_name.get(p.name, {}).get("chunk_count", chunk_counts.get(p.name, 0)),
+            "ingest_error": by_name.get(p.name, {}).get("error") or status.get(p.name, {}).get("ingest_error"),
         }
         for p in directory.iterdir()
         if p.is_file() and not p.name.startswith(".")
@@ -185,10 +262,11 @@ def delete_file(filename: str, session_id: str | None = None, workspace_id: str 
 
     tombstone = session_dir / f".{uuid4()}.deleting"
     target.replace(tombstone)
+    record = find_document_by_name(safe_filename, workspace_id=workspace_id, session_id=None if workspace_id else session_id)
     try:
         deleted_chunks = (
-            RAGService().delete_file(session_id or "", safe_filename, workspace_id=workspace_id)
-            if workspace_id else RAGService().delete_file(session_id, safe_filename)
+            RAGService().delete_file(session_id or "", safe_filename, workspace_id=workspace_id, document_id=record["id"] if record else None)
+            if workspace_id else RAGService().delete_file(session_id, safe_filename, document_id=record["id"] if record else None)
         )
     except Exception as exc:
         tombstone.replace(target)
@@ -208,6 +286,8 @@ def delete_file(filename: str, session_id: str | None = None, workspace_id: str 
     status = _load_status(session_dir)
     status.pop(safe_filename, None)
     _save_status(session_dir, status)
+    if record:
+        delete_document_record(record["id"])
     return {
         "session_id": session_id,
         "workspace_id": workspace_id,

@@ -56,11 +56,11 @@ const renderedContent = computed(() =>
         <template v-for="(source, index) in message.sources" :key="`${source.url ?? source.document_id}:${source.chunk_index}:${index}`">
         <a v-if="source.type === 'web' && source.url" :href="source.url" target="_blank" rel="noopener noreferrer"
           class="source-chip max-w-full truncate rounded-xl border border-white/10 bg-white/[0.035] px-3 py-1.5 text-white/65 hover:text-white/90"
-          :title="source.url">🌐 {{ source.title || source.url }}</a>
+          :title="source.url">【{{ source.citation_id ?? index + 1 }}】 🌐 {{ source.title || source.url }}</a>
         <details v-else
           class="source-chip group max-w-full rounded-xl border border-white/10 bg-white/[0.035] text-white/65 open:w-full open:max-w-xl">
           <summary class="cursor-pointer truncate px-3 py-1.5 marker:text-white/30 hover:text-white/90">
-            📄 {{ source.filename }} · Chunk {{ source.chunk_index }}
+            【{{ source.citation_id ?? index + 1 }}】 📄 {{ source.filename }}<template v-if="source.page_number"> · Page {{ source.page_number }}</template><template v-else> · Chunk {{ source.chunk_index }}</template><template v-if="source.section"> · {{ source.section }}</template>
           </summary>
           <p class="border-t border-white/10 px-3 py-2 leading-relaxed whitespace-pre-wrap text-white/55">{{ source.content_preview }}</p>
         </details>

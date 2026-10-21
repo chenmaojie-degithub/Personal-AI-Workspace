@@ -117,6 +117,7 @@ async function remove() {
           <button v-if="!confirmDelete" type="button" class="mt-2 text-xs text-red-300/80 hover:text-red-200" @click="confirmDelete = true">Delete Workspace...</button>
           <div v-else class="mt-2 space-y-2 rounded-lg border border-red-400/20 bg-red-400/5 p-3">
             <p class="text-xs text-red-200">Delete this Workspace, its chats, usage and knowledge files? This cannot be undone.</p>
+            <p class="text-xs text-white/55">独立 Memory 不会自动删除；可能保留孤立记录，请先备份并在 Memory 管理中核对。</p>
             <div class="flex gap-3 text-xs"><button type="button" class="text-red-300 disabled:opacity-40" :disabled="saving || chat.isLoading.value || chat.isRestoring.value" @click="remove">Confirm delete</button><button type="button" class="text-white/60" @click="confirmDelete = false">Cancel</button></div>
           </div>
         </template>

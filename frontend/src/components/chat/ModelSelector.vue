@@ -14,7 +14,8 @@ const open = ref(false)
 const selected = computed(() => props.models.find((model) => model.model_id === props.modelValue))
 
 function label(model: AvailableModel) {
-  return model.provider === 'openrouter' ? 'OpenRouter Free'
+  return model.model_id === 'openrouter/free' ? 'OpenRouter Free (experimental)'
+    : model.provider === 'openrouter' ? `OpenRouter · ${model.model}`
     : model.provider === 'deepseek' ? 'DeepSeek' : model.model
 }
 
