@@ -43,4 +43,5 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec vue-tsc --noEmit
+      - run: pnpm run test:memory
       - run: pnpm run build

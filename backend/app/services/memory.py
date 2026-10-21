@@ -143,6 +143,17 @@ class MemoryService:
             connection.execute("DELETE FROM memories WHERE workspace_id=? AND id=?", (workspace_id, memory_id))
             return True
 
+    def orphan_preview(self, live_workspace_ids: set[str]) -> dict:
+        """Metadata only. This two-store snapshot never authorizes automatic deletion."""
+        if not live_workspace_ids:
+            raise MemoryUnavailable("Workspace inventory unavailable; cannot classify orphans")
+        with self.connection("lifecycle-preview") as connection:
+            groups = connection.execute("SELECT workspace_id, COUNT(*) AS count FROM memories GROUP BY workspace_id ORDER BY workspace_id").fetchall()
+        orphans = [{"workspace_id": row["workspace_id"], "count": row["count"]}
+                   for row in groups if row["workspace_id"] not in live_workspace_ids]
+        return {"orphans": orphans, "record_count": sum(row["count"] for row in orphans),
+                "action": "retain", "atomic_snapshot": False}
+
 
 def memory_messages(workspace_id: str | None, query: str) -> list[dict]:
     """Bound serialized payload bytes conservatively; unknown tokenizers are not measured."""

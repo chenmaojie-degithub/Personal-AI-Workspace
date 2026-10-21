@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test:memory": "node --experimental-strip-types --test tests/memories.test.mjs",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview"
   },

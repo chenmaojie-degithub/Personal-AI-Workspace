@@ -1,5 +1,7 @@
 # Long-term Memory V1
 
+> V1.1 已补充 Settings 管理与只读生命周期预览，参见 [Memory V1.1](memory-v1.1.md)。下文保留 V1 原始实现和当时验收记录。
+
 ## 范围与架构
 
 | 类型 | 数据与用途 | 当前实现 |

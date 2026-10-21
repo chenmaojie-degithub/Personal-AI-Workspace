@@ -2,6 +2,13 @@
 
 Maintain a concise, factual record for changes on the active feature branch. Link to the exact commit/acceptance report, distinguish mock/replay vs live tests, and list known limits. Do not describe unverified behavior as complete.
 
+## 2026-10-21 — Memory V1.1 management and lifecycle
+
+- Added a Settings Memory card reusing Workspace state and the V1 APIs: list key/value/update time/version, explicit create/edit confirmation, versioned edits, delete confirmation, conflict draft retention with explicit latest-version reload, and clear disabled/unavailable/network messages. Scoped request epochs, per-list sequences and AbortControllers prevent stale reads/writes/errors (including A→B→A) from leaking across Workspaces; no full memory content in localStorage, no automatic enabling or retries.
+- Added metadata-only orphan inspection (`GET /memory/maintenance/orphans`), retaining all records. Missing/failed Workspace inventories return 503; the preview explicitly disclaims an atomic cross-database snapshot. Workspace deletion warning now explains retained sidecar memories. No cleanup/export/restore mutation API, schema/algorithm change, user PostgreSQL access or user-data deletion.
+- Verification: targeted Memory/lifecycle **30 passed**, frontend Mock-fetch **10 passed**, full backend **195 passed**, `vue-tsc --noEmit` and build passed. Added frontend tests to existing CI without dependencies. Real browser interaction against isolated synthetic API passed creation/edit confirmation, 409 recovery, Workspace switch, refresh, delete cancel/confirm, 503, orphan preview and a held-response race; final browser error log was empty. Existing build/deprecation warnings remain.
+- No real LLM/Exa/Embedding calls. Default Memory remains off; PostgreSQL migration/recovery and live-model acceptance remain unverified. Docs: `docs/memory-v1.1.md`, including offline export/restore/delete risks, concurrent-write tests and in-flight snapshot limits; synthetic browser screenshot included. Permanent orphan cleanup requires separate data-scope confirmation and recovery review.
+
 ## 2026-10-20 — Long-term Memory V1
 
 - Added opt-in `MemoryService` and explicit Workspace-scoped CRUD/query APIs using a separate SQLite sidecar, never the business database connection. User confirmation is mandatory for create/update; normalized keys deduplicate identical writes, conflicting creates/stale updates or deletes return 409. Every lookup/mutation includes Workspace scope. No automatic extraction, memory write tools, frontend manager, embeddings or Chroma changes.

@@ -5,10 +5,11 @@ import sqlite3
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.core.database import get_workspace
+from app.core.database import get_workspace, list_workspaces
 from app.services.memory import MemoryConflict, MemoryService, MemoryUnavailable
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/memories", tags=["memory"])
+maintenance_router = APIRouter(prefix="/memory/maintenance", tags=["memory"])
 
 
 class MemoryCreate(BaseModel):
@@ -23,6 +24,17 @@ class MemoryUpdate(BaseModel):
     value: str = Field(min_length=1, max_length=1000)
     expected_version: int = Field(ge=1, strict=True)
     confirmed: bool = Field(strict=True)
+
+
+@maintenance_router.get("/orphans")
+def orphan_preview() -> dict:
+    try:
+        service = MemoryService()  # No inventory access while Memory is disabled.
+        live_ids = {item["id"] for item in list_workspaces()}
+        return service.orphan_preview(live_ids)
+    except Exception as exc:
+        # Never classify an unavailable business database as an empty inventory.
+        raise HTTPException(status_code=503, detail="Memory lifecycle preview unavailable; no records were removed") from exc
 
 
 @contextmanager
