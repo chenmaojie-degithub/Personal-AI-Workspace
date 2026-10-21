@@ -1,11 +1,11 @@
 # Integration Acceptance V1
 
-日期：2026-10-21。分支 `feat/agent-core`。原浏览器验收基于 `e5bd76ec51d13a204ac163b0a42edbbef0e1e904`；本轮 HTTP 复验使用该版本加迭代器兼容补丁，不冒充新的浏览器验收。
+日期：2026-10-21。分支 `feat/agent-core`。兼容修复及验收材料提交 `2e2bb099cb602368c49fadca5105fb2ae70aca23`。原浏览器验收基于 `e5bd76ec51d13a204ac163b0a42edbbef0e1e904`；本轮 HTTP 复验使用该版本加迭代器兼容补丁，不冒充新的浏览器验收。
 
-## 总结：本地检查通过，等待兼容补丁对应 CI
+## 总结：本轮 CI 阻断已解除，离线/本地验收范围通过
 
 - **PASS**：独立 FastAPI + SQLite + Chroma 的真实 TCP/HTTP 17 项；真实 Vue 浏览器下的 Workspace/Session、Chat、SSE、Agent、Sources、Memory、刷新、Stop、超时提示。模型、Web 和 Embedding 均为离线替身。
-- **本地 PASS / CI PENDING**：迭代器兼容补丁的针对性 77 项、完整后端 227 项及 65 个子测试、前端类型检查/10 项 Memory 测试/build 全部通过；真实 HTTP 17 项复验通过。`e5bd76e` 的旧 CI 失败作为历史证据保留，不能替代新提交的 CI。新 CI 成功前不解除验收阻断。
+- **PASS / 新 CI 成功**：兼容补丁 `2e2bb09` 的 [GitHub CI #42](https://github.com/chenmaojie-degithub/Personal-AI-Workspace/actions/runs/39529391782) 后端与前端均成功；后端 227 passed、65 subtests passed。对应本地针对性 77 项、完整后端 227 项及 65 个子测试、前端类型检查/10 项 Memory 测试/build 全部通过；真实 HTTP 17 项复验通过。收到新 CI 成功结果后才更新本结论；`e5bd76e` 旧 CI 失败保留为历史证据。
 - **FAIL / P2 显示限制**：刷新后消息级 Token 徽标不恢复；正文、Sources、Agent Run 指标恢复。临时数据库中对应普通聊天的 6 Token 记录仍在，历史接口未返回单条 Usage，不是底层用量丢失。
 - **BLOCKED**：用户 PostgreSQL 独立恢复/迁移验收，沿用既有权限阻断；本轮没有建立连接或重新验证权限。
 - **NOT TESTED**：真实 LLM/Exa/Embedding、付费资源、生产数据、远程服务实际超时/限流、全量浏览器回归。本轮仅复验 HTTP 和离线回归；先前浏览器结果仍明确标注原运行版本，不将其当作本轮重新执行的浏览器测试。
@@ -85,11 +85,11 @@
 
 复现：不存在的 workspace_id + 复杂目标请求 `/chat/stream`；客户端收到 RemoteProtocolError，而普通 Chat 收到 error 事件。`create_agent_run()` 位于原有异常处理之前。提交 `c900c63a170a6714671d8f950d85af5fb53e222e` 增加初始化 ValueError 保护，未创建 Run/调用模型/保存消息。19 项针对性测试与实际 HTTP 四路径验证通过，该提交 CI 通过。
 
-### P1：TCP 断连后 Run 未终止 — 实际 HTTP 已修复，等待新 CI
+### P1：TCP 断连后 Run 未终止 — 已修复，实际 HTTP 与新 CI 通过
 
 复现：较慢 Agent 第一个 message 后关闭 TCP 响应，5 秒后 Run 仍为 replanning、metrics.finished=false；没有保存半截消息。ASGI 取消异步迭代未可靠关闭底层同步 Generator。提交 `e5bd76ec51d13a204ac163b0a42edbbef0e1e904` 增加显式嵌套关闭和 shielded 清理；29 项针对性测试、实际 HTTP 17 项及浏览器 Stop 通过。
 
-### CI 阻断：旧 Mock 返回不可关闭迭代器 — 本地修复通过，等待新 CI
+### CI 阻断：旧 Mock 返回不可关闭迭代器 — 已修复，新 CI 通过
 
 [失败 CI](https://github.com/chenmaojie-degithub/Personal-AI-Workspace/actions/runs/39526851205)：后端 `AgentOrchestratorTests.test_complex_request_is_dispatched_through_agent_sse` 使用 `iter([...])`，`contextlib.closing` 在退出时直接调用不存在的 `.close()`。这是迭代器契约兼容回归，不是 Linux/Python 3.12 独有问题。后端 201 passed、1 failed、65 subtests passed；前端通过。
 
@@ -104,7 +104,7 @@
 
 原两项测试 **2/2 PASS**；相关 SSE/Agent/Observability **77 PASS**；完整 pytest **227 PASS + 65 子测试 PASS**；vue-tsc、10 项前端 Memory 测试、build 均通过。只有既有 Starlette 弃用、Node 类型剥离实验提示与 Vite 包大小告警。
 
-实际 TCP/HTTP 17 项复验全部通过；另外从实际详情/历史接口核对 TCP 断连与显式取消均 cancelled、模型错误/超时均 failed，四者 metrics.finished=true 且保存消息为 0；完成任务 completed、finished=true、保存 2 条消息。本轮记录 47 次 Mock Provider 调用、10 次 Mock Web handler 调用、外部网络拦截尝试 0；真实 API 调用 0。旧浏览器证据未重写。新 CI 尚未完成，不能据本地通过宣称整个验收通过。
+实际 TCP/HTTP 17 项复验全部通过；另外从实际详情/历史接口核对 TCP 断连与显式取消均 cancelled、模型错误/超时均 failed，四者 metrics.finished=true 且保存消息为 0；完成任务 completed、finished=true、保存 2 条消息。本轮记录 47 次 Mock Provider 调用、10 次 Mock Web handler 调用、外部网络拦截尝试 0；真实 API 调用 0。旧浏览器证据未重写。[修复提交 CI](https://github.com/chenmaojie-degithub/Personal-AI-Workspace/actions/runs/39529391782) 已成功，可解除本轮迭代器兼容阻断；不将离线通过扩大为生产 PostgreSQL 或真实模型验收通过。
 
 ### P2：消息级 Token 徽标刷新不恢复 — 未修复
 
@@ -132,6 +132,6 @@ node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5179 --strictPort
 
 测试服务包含仅本地的控制接口，不能部署生产。结束时关闭独立浏览器页与两个测试进程；本轮已关闭。未做破坏性用户数据操作，没有数据库结构变更。
 
-原失败检查点按 AGENTS.md 停止后，本轮在用户明确授权下完成上述窄范围兼容修复与本地复验。报告、离线脚本和已核对的合成证据将随功能分支提交；原 Memory 截图未作为有效内容证据，也不删除或覆盖它。下一步先核对补丁提交的 CI，成功后才更新本报告的相应范围结论和 Draft PR #1。不合并 main、不创建 Tag/Release。
+原失败检查点按 AGENTS.md 停止后，本轮在用户明确授权下完成上述窄范围兼容修复与本地复验。报告、离线脚本和已核对的合成证据已随功能分支提交于 `2e2bb09`；原 Memory 截图未作为有效内容证据，也不删除或覆盖它。补丁提交 CI 成功后，本次文档跟进才记录相应范围通过，并更新 Draft PR #1。后续保留 PostgreSQL BLOCKED 与 P2 显示限制，不合并 main、不创建 Tag/Release。
 
 后续真实模型预算建议（**未执行，需逐阶段批准**）：先 1 次简单请求（输入≤1500、输出≤128）；再一个最多 6 次模型调用的两工具 Agent（累计输入≤8000、输出≤1200、90 秒）；最后 1 次 Memory 问答（输入≤1500、输出≤128）。优先回放工具结果，不请求 Exa；若验真实 Exa，另批准最多 1 次。届时核查已配置模型的 tools 支持、可用性与价格，不切付费模型、不重试或充值；价格未知时不能把费用写为 0，也不启动调用。

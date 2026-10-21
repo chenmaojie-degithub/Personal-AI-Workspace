@@ -2,12 +2,12 @@
 
 Maintain a concise, factual record for changes on the active feature branch. Link to the exact commit/acceptance report, distinguish mock/replay vs live tests, and list known limits. Do not describe unverified behavior as complete.
 
-## 2026-10-21 — Iterator cleanup compatibility (local PASS, CI pending)
+## 2026-10-21 — Iterator cleanup compatibility (scoped acceptance PASS)
 
 - Replaced unconditional `contextlib.closing` at the Agent SSE boundary with the existing ExitStack pattern, registering only callable `close` methods. The ASGI cleanup boundary applies the same guard and retains cancellation shielding. Plain iterators/noncallable attributes are accepted; real generator cleanup failures propagate without suppression.
 - Fixed regression-test ownership of error expectations: the shared consumer propagates errors, while each test asserts iteration vs cleanup failure. Simultaneous failures retain the original ValueError in the cleanup RuntimeError's context. Existing legacy list-iterator Mock remains unchanged.
 - Verification: original **2 failures now pass**; related SSE/Agent/Observability **77 passed**; full backend **227 passed, 65 subtests passed**; frontend typecheck, **10 Memory tests** and build passed. Actual loopback HTTP **17/17 passed** again, including TCP disconnect and cancel → terminal cancelled Runs, finished metrics and no partial messages. No real LLM/Exa/Embedding calls or user PostgreSQL/schema changes.
-- Added the existing isolated HTTP harnesses and synthetic acceptance evidence to the scoped deliverable; retained previous HTTP/browser evidence and wrote the new HTTP results separately. Report: `docs/acceptance/integration-acceptance-v1.md`. CI has not yet verified this patch; the scoped acceptance conclusion stays pending. P2 Token-badge refresh and PostgreSQL/live-provider limits remain.
+- Fix/evidence commit `2e2bb099cb602368c49fadca5105fb2ae70aca23` pushed to `feat/agent-core`; [CI #42](https://github.com/chenmaojie-degithub/Personal-AI-Workspace/actions/runs/39529391782) passed backend and frontend. Only after that result, marked iterator cleanup/offline-local acceptance passed. Existing isolated HTTP harnesses and synthetic evidence are committed; previous HTTP/browser evidence retained and new HTTP results written separately. Report: `docs/acceptance/integration-acceptance-v1.md`. P2 Token-badge refresh and PostgreSQL/live-provider limits remain; no release-readiness claim or main merge.
 
 ## 2026-10-21 — Integration acceptance checkpoint (prior CI BLOCKED)
 
